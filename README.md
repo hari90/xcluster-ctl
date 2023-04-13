@@ -1,2 +1,2 @@
 # xcluster-ctl
-xcluster-ctl
+python3 xcluster-ctl.py

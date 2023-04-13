@@ -23,12 +23,14 @@ class UniverseConfig:
     tserver_web_server_map = []
     bootstrap_table_ids = []
     bootstrap_ids = []
+    role = ""
 
     def __str__(self):
         if not self.initialized:
             return "not initialized"
 
-        return "{'universe_name': '" + self.universe_name + "', 'master_ips': '" + str(self.master_ip_map) + "', 'tserver_ips': '" + str(self.tserver_ip_map) + "'}"
+        return "{'universe_name': '" + self.universe_name + "', 'master_ips': '" + str(self.master_ip_map) + "', 'tserver_ips': '" + str(self.tserver_ip_map) + \
+                "', 'role': '" + self.role + "'}"
 
     def InitMasterInfo(self):
         self.master_ip_map = [ip.strip() for ip in self.master_ips.split(",")]
@@ -114,9 +116,12 @@ def validate_ip_csv(ip_str : str):
         # Use the ipaddress module to validate if the IP is valid
         ipaddress.ip_address(ip)
 
+def get_flags(url : str, ca_cert_path: str):
+    return http_get(f"{url}varz?raw", ca_cert_path)
+
 def get_universe_info(config : UniverseConfig):
     log("Getting universe info")
-    flags = http_get(f"{config.master_web_server_map[0]}varz?raw", config.ca_cert_path)
+    flags = get_flags(config.master_web_server_map[0], config.ca_cert_path)
 
     cluster_uuid_pattern = r"--cluster_uuid=(.+)"
     match = re.search(cluster_uuid_pattern, flags)
@@ -205,8 +210,9 @@ def configure(args):
     copy_certs(primary_config, standby_config)
     copy_certs(standby_config, primary_config)
 
-    write_config_file()
-    show_config([])
+    reload_roles(args)
+
+    show_config(args)
 
     log(Color.GREEN+"Successfully configured\n")
     validate_universes([])
@@ -236,7 +242,7 @@ required_master_flags = required_common_flags.union({
 required_tserver_flags = required_common_flags
 
 def validate_flags(url : str, ca_cert_path : str, required_flags):
-    set_flags = http_get(f"{url}varz?raw", ca_cert_path)
+    set_flags = get_flags(url, ca_cert_path)
 
     for flag in required_flags:
         if flag not in set_flags:
@@ -279,18 +285,29 @@ def get_xcluster_safe_time(args):
         time.sleep(2)
     log("\n"+Color.GREEN+"Successfully got xcluster_safe_time")
 
+def is_standy_role(config: UniverseConfig):
+    result = http_get(f"{config.master_web_server_map[0]}xcluster-config", config.ca_cert_path)
+    return "role: STANDBY" in result
+
 def set_standby_role(args):
     log(f"Setting {standby_config.universe_name} to STANDBY")
-    run_yb_admin(standby_config, "change_xcluster_role STANDBY")
-    # Wait for async processing
-    time.sleep(2)
+    if standby_config.role != "STANDBY":
+        run_yb_admin(standby_config, "change_xcluster_role STANDBY")
+        standby_config.role = "STANDBY"
+        write_config_file()
+        # Wait for async processing
+        time.sleep(2)
     log(Color.GREEN+"Successfully set role to STANDBY")
 
     get_xcluster_safe_time([])
 
 def set_active_role(args):
     log(f"Setting {standby_config.universe_name} to ACTIVE")
-    run_yb_admin(standby_config, "change_xcluster_role ACTIVE")
+
+    if standby_config.role != "ACTIVE":
+        run_yb_admin(standby_config, "change_xcluster_role ACTIVE")
+        standby_config.role = "ACTIVE"
+        write_config_file()
     # Wait for async processing
     time.sleep(2)
     log(Color.GREEN+"Successfully set role to ACTIVE")
@@ -364,9 +381,10 @@ def bootstrap_databases(args):
         raise_exception("There is already an available bootstrap. Run setup_replication_with_bootstrap")
 
     if len(args) != 1:
-        raise_exception("Please provide a CSV list of database names to bootstrap")
-    databases = args[0].split(',')
-    table_ids = get_table_ids(databases)
+        databases = input("Please provide a CSV list of database names to bootstrap: ")
+    else:
+        databases = args[0]
+    table_ids = get_table_ids(databases.split(','))
 
     if len(table_ids) == 0:
         raise_exception("No tables found")
@@ -409,17 +427,19 @@ def setup_replication_with_bootstrap(args):
     clear_bootstrap_from_config()
 
     log(Color.GREEN+"Successfully setup replication")
+    set_standby_role(args)
 
-def setup_replication_without_bootstrap(args):
+def setup_replication(args):
     if len(primary_config.bootstrap_ids) > 0:
         raise_exception("There is already an available bootstrap. Run setup_replication_with_bootstrap")
 
     log(f"Setting up replication from {primary_config.universe_name} to {standby_config.universe_name} without bootstrap")
 
     if len(args) != 1:
-        raise_exception("Please provide a CSV list of database names to bootstrap")
-    databases = args[0].split(',')
-    table_ids = get_table_ids(databases)
+        databases = input("Please provide a CSV list of database names to bootstrap: ")
+    else:
+        databases = args[0]
+    table_ids = get_table_ids(databases.split(','))
 
     if len(table_ids) == 0:
         raise_exception("No tables found")
@@ -428,6 +448,7 @@ def setup_replication_without_bootstrap(args):
     log('\n'.join(result))
 
     log(Color.GREEN+"Successfully setup replication")
+    set_standby_role(args)
 
 def delete_replication(args):
     log(f"Deleting replication from {primary_config.universe_name} to {standby_config.universe_name}")
@@ -435,21 +456,63 @@ def delete_replication(args):
     log('\n'.join(result))
     log(Color.GREEN+"Successfully deleted replication")
 
+def swap_universe_configs(args):
+    log(f"Swapping Primay and Standby universes")
+    global standby_config, primary_config
+    temp = standby_config
+    standby_config = primary_config
+    primary_config = temp
+
+    write_config_file()
+    show_config(args)
+
+def planned_failover(args):
+    log(f"Performing a planned failover from {primary_config.universe_name} to {standby_config.universe_name}")
+    wait_for_replication_drain(args)
+    get_xcluster_safe_time(args)
+    proceed = input("Are you sure you want to proceed? (yes/no): ")
+    if proceed.lower() not in ["yes","y"]:
+        log(Color.YELLOW+"Planned failover abandoned")
+        return
+    set_active_role(args)
+    delete_replication(args)
+    swap_universe_configs(args)
+    setup_replication_with_bootstrap(args)
+
+    log(Color.GREEN+f"Successfully failed over from {primary_config.universe_name} to {standby_config.universe_name}")
+
+def reload_roles(args):
+    if is_standy_role(primary_config):
+        primary_config.role = "STANDBY"
+    else:
+        primary_config.role = "ACTIVE"
+
+    if is_standy_role(standby_config):
+        standby_config.role = "STANDBY"
+    else:
+        standby_config.role = "ACTIVE"
+
+    write_config_file()
+    show_config(args)
+
 def main():
     # Define a dictionary to map user input to functions
     function_map = {
         "configure": configure,
         "show_config":show_config,
         "validate_universes": validate_universes,
-        "setup_replication_without_bootstrap" : setup_replication_without_bootstrap,
+        "setup_replication" : setup_replication,
         "setup_replication_with_bootstrap" : setup_replication_with_bootstrap,
         "set_standby_role" : set_standby_role,
         "set_active_role" : set_active_role,
         "get_xcluster_safe_time" : get_xcluster_safe_time,
+        "planned_failover" : planned_failover,
         "wait_for_replication_drain" : wait_for_replication_drain,
         "bootstrap_databases" : bootstrap_databases,
         "clear_bootstrap" : clear_bootstrap,
         "delete_replication" : delete_replication,
+        "reload_roles" : reload_roles,
+        "switch_universe_configs" : swap_universe_configs,
     }
 
     usage_str=f"Usage: python3 {sys.argv[0]} <command> [args]\n"\

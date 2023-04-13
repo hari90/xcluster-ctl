@@ -315,6 +315,9 @@ def is_replication_drain_done(stream_ids):
 
 def wait_for_replication_drain(args):
     stream_ids = get_cdc_streams()
+    if len(stream_ids) == 0:
+        raise_exception("No replication in progress")
+
     log("Waiting for replication drain...")
     while not is_replication_drain_done(stream_ids):
         time.sleep(1)
@@ -373,6 +376,11 @@ def bootstrap_databases(args):
 
     log(Color.GREEN+"Successfully bootstrapped databases. Run setup_replication_with_bootstrap to complete setup")
 
+def clear_bootstrap_from_config():
+    primary_config.bootstrap_table_ids = []
+    primary_config.bootstrap_ids = []
+    write_config_file()
+
 def clear_bootstrap(args):
     if len(primary_config.bootstrap_ids) == 0:
         log(Color.GREEN+"No pending bootstraps to clear")
@@ -382,9 +390,7 @@ def clear_bootstrap(args):
     for bootstrap in primary_config.bootstrap_ids:
         delete_cdc_streams(bootstrap)
 
-    primary_config.bootstrap_table_ids = []
-    primary_config.bootstrap_ids = []
-    write_config_file()
+    clear_bootstrap_from_config()
 
     log(Color.GREEN+"Successfully cleared bootstrap")
 
@@ -392,12 +398,20 @@ def setup_replication_with_bootstrap(args):
     if len(primary_config.bootstrap_ids) == 0:
         bootstrap_databases(args)
 
-    copy_certs(primary_config, standby_config)
-    copy_certs(standby_config, primary_config)
+    log(f"Setting up replication from {primary_config.universe_name} to {standby_config.universe_name}")
 
     result = run_yb_admin(standby_config, f"setup_universe_replication {primary_config.universe_uuid}_repl {primary_config.master_addresses} {','.join(primary_config.bootstrap_table_ids)} {','.join(primary_config.bootstrap_ids)}")
-    print(result)
+    log('\n'.join(result))
 
+    clear_bootstrap_from_config()
+
+    log(Color.GREEN+"Successfully setup replication")
+
+def delete_replication(args):
+    log(f"Deleting replication from {primary_config.universe_name} to {standby_config.universe_name}")
+    result = run_yb_admin(standby_config, f"delete_universe_replication {primary_config.universe_uuid}_repl")
+    log('\n'.join(result))
+    log(Color.GREEN+"Successfully deleted replication")
 
 def main():
     # Define a dictionary to map user input to functions
@@ -412,6 +426,7 @@ def main():
         "bootstrap_databases" : bootstrap_databases,
         "clear_bootstrap" : clear_bootstrap,
         "setup_replication_with_bootstrap" : setup_replication_with_bootstrap,
+        "delete_replication" : delete_replication,
     }
 
     usage_str=f"Usage: python3 {sys.argv[0]} <command> [args]\n"\
@@ -435,6 +450,7 @@ def main():
     if not is_configured():
         configure([])
 
+    log(f"[ {Color.BLUE}{primary_config.universe_name}{Color.RESET} -> {Color.BLUE}{standby_config.universe_name}{Color.RESET} ]")
     if user_input in function_map:
         function_map[user_input](sys.argv[2:])
     else:

@@ -442,7 +442,7 @@ def main():
     log_to_file(' '.join(sys.argv))
 
     if user_input == "configure":
-        configure()
+        configure([])
         return
 
     read_config_file()

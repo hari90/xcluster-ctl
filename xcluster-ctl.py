@@ -21,6 +21,8 @@ class UniverseConfig:
     master_web_server_map = []
     tserver_ip_map = []
     tserver_web_server_map = []
+    bootstrap_table_ids = []
+    bootstrap_ids = []
 
     def __str__(self):
         if not self.initialized:
@@ -181,9 +183,6 @@ def copy_certs(from_config : UniverseConfig, to_config : UniverseConfig):
         copy_file_to_remote(node, to_config.pem_file_path, from_config.ca_cert_path, f"yugabyte-tls-producer/{from_config.universe_uuid}_repl/{ca_file}")
 
 def configure(args):
-    # temp code
-    # read_config_file()
-
     master_ips = input("Enter one Primary universe master IP: ")
     ipaddress.ip_address(master_ips)
 
@@ -302,6 +301,7 @@ def get_cdc_streams():
             stream_id = line.split(':')[-1].strip().strip('"')
             stream_ids.append(stream_id)
     log(f"Found {len(stream_ids)} replication streams")
+    log_to_file(stream_ids)
     return stream_ids
 
 def is_replication_drain_done(stream_ids):
@@ -334,21 +334,68 @@ def get_table_ids(databases):
                 break
         if match:
             table_ids += [table_and_db.split(' ')[1]]
+
+    log_to_file(table_ids)
     return table_ids
 
+def delete_cdc_streams(stream_id):
+    result = run_yb_admin(primary_config, f"delete_cdc_stream {stream_id} force_delete")
+    log_to_file(result)
+
+def bootstrap_tables(table_ids):
+    log(f"Bootstrapping {len(table_ids)} tables")
+
+    result = run_yb_admin(primary_config, "bootstrap_cdc_producer "+','.join(table_ids))
+    bootstrap_ids = []
+    for line in result:
+        bootstrap_ids.append(line.split(':')[-1].strip())
+
+    log_to_file(bootstrap_ids)
+    return bootstrap_ids
+
 def bootstrap_databases(args):
+    if len(primary_config.bootstrap_table_ids) > 0:
+        raise_exception("There is already an available bootstrap. Run setup_replication_with_bootstrap")
+
     if len(args) != 1:
-        print(Color.RED+"Please provide a CSV list of database names to bootstrap"+Color.RESET)
-        return
+        raise_exception("Please provide a CSV list of database names to bootstrap")
     databases = args[0].split(',')
     table_ids = get_table_ids(databases)
 
     if len(table_ids) == 0:
         raise_exception("No tables found")
 
-    log(f"Bootstrapping {len(table_ids)} tables")
-    # result = run_yb_admin(primary_config, "bootstrap_cdc_producer "+','.join(table_ids))
-    result = ['table id: 00004021000030008000000000004035, CDC bootstrap id: 4c43995201bf4407940722db63603b25', 'table id: 0000402100003000800000000000403a, CDC bootstrap id: 3d650f9c41a14d879814b9a7082f1cf0', 'table id: 0000402100003000800000000000403b, CDC bootstrap id: 0ad088ee24ee4bd6acbbf4d496ea1d33', 'table id: 00004021000030008000000000004025, CDC bootstrap id: 632ad73d59ce4e8fa7ea8ece7c1a8eae', 'table id: 00004021000030008000000000004034, CDC bootstrap id: 1c1d48989db046caa25302b09e3b3b3f', 'table id: 00004021000030008000000000004022, CDC bootstrap id: 676723f07e374d878c3b8613a1a98a4f', 'table id: 0000402100003000800000000000402a, CDC bootstrap id: 457ca696f0e5495894be903b0e6e5833', 'table id: 000033f1000030008000000000004018, CDC bootstrap id: 1a8752bcf85f41239a2d0b15101790f5', 'table id: 000033f100003000800000000000401d, CDC bootstrap id: 8a32f38d2cb8454aa971c79cf2d84ef5', 'table id: 000033f100003000800000000000401e, CDC bootstrap id: f00c05c2b3a64360a35e98f7e8bc448f', 'table id: 000033f1000030008000000000004008, CDC bootstrap id: 66b16e6a48b94fec9a9963f487d77e4f', 'table id: 000033f1000030008000000000004017, CDC bootstrap id: 7381d4058cfb47cd961b86e9056f0741', 'table id: 000033f1000030008000000000004005, CDC bootstrap id: d9b5aeae67364d0eb0bec37b28b316f4', 'table id: 000033f100003000800000000000400d, CDC bootstrap id: 7d3e419ba8d9437e8a264a273f827e5d']
+    bootstrap_ids = bootstrap_tables(table_ids)
+
+    primary_config.bootstrap_table_ids = table_ids
+    primary_config.bootstrap_ids = bootstrap_ids
+    write_config_file()
+
+    log(Color.GREEN+"Successfully bootstrapped databases. Run setup_replication_with_bootstrap to complete setup")
+
+def clear_bootstrap(args):
+    if len(primary_config.bootstrap_ids) == 0:
+        log(Color.GREEN+"No pending bootstraps to clear")
+        return
+
+    log(f"Deleting {len(primary_config.bootstrap_ids)} streams")
+    for bootstrap in primary_config.bootstrap_ids:
+        delete_cdc_streams(bootstrap)
+
+    primary_config.bootstrap_table_ids = []
+    primary_config.bootstrap_ids = []
+    write_config_file()
+
+    log(Color.GREEN+"Successfully cleared bootstrap")
+
+def setup_replication_with_bootstrap(args):
+    if len(primary_config.bootstrap_ids) == 0:
+        bootstrap_databases(args)
+
+    copy_certs(primary_config, standby_config)
+    copy_certs(standby_config, primary_config)
+
+    result = run_yb_admin(standby_config, f"setup_universe_replication {primary_config.universe_uuid}_repl {primary_config.master_addresses} {','.join(primary_config.bootstrap_table_ids)} {','.join(primary_config.bootstrap_ids)}")
     print(result)
 
 
@@ -363,6 +410,8 @@ def main():
         "get_xcluster_safe_time" : get_xcluster_safe_time,
         "wait_for_replication_drain" : wait_for_replication_drain,
         "bootstrap_databases" : bootstrap_databases,
+        "clear_bootstrap" : clear_bootstrap,
+        "setup_replication_with_bootstrap" : setup_replication_with_bootstrap,
     }
 
     usage_str=f"Usage: python3 {sys.argv[0]} <command> [args]\n"\
@@ -384,7 +433,7 @@ def main():
     read_config_file()
 
     if not is_configured():
-        configure()
+        configure([])
 
     if user_input in function_map:
         function_map[user_input](sys.argv[2:])

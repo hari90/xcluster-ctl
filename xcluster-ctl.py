@@ -203,7 +203,7 @@ def configure(args):
     copy_certs(standby_config, primary_config)
 
     write_config_file()
-    show_config()
+    show_config([])
 
     log(Color.GREEN+"Successfully configured\n")
     validate_universes()

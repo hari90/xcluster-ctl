@@ -180,7 +180,7 @@ def copy_certs(from_config : UniverseConfig, to_config : UniverseConfig):
     for node in nodes:
         copy_file_to_remote(node, to_config.pem_file_path, from_config.ca_cert_path, f"yugabyte-tls-producer/{from_config.universe_uuid}_repl/{ca_file}")
 
-def configure():
+def configure(args):
     # temp code
     # read_config_file()
 
@@ -209,7 +209,7 @@ def configure():
     log(Color.GREEN+"Successfully configured\n")
     validate_universes()
 
-def show_config():
+def show_config(args):
     log("Primary Universe:")
     log(Color.YELLOW+str(primary_config))
     log("Standby Universe:")
@@ -247,7 +247,7 @@ def validate_flags_on_universe(config: UniverseConfig):
     for url in config.tserver_web_server_map:
         validate_flags(url, config.ca_cert_path, required_tserver_flags)
 
-def validate_universes():
+def validate_universes(args):
     validate_flags_on_universe(primary_config)
     validate_flags_on_universe(standby_config)
     log(Color.GREEN + "Universe validation successful")
@@ -271,13 +271,13 @@ def get_xcluster_safe_time_int():
     return uninitialized_safe_time
 
 
-def get_xcluster_safe_time():
+def get_xcluster_safe_time(args):
     while get_xcluster_safe_time_int():
         log(Color.YELLOW+"Some xcluster_safe_time are not initialized. Waiting...\n")
         time.sleep(2)
     log("\n"+Color.GREEN+"Successfully got xcluster_safe_time")
 
-def set_standby_role():
+def set_standby_role(args):
     log(f"Setting {standby_config.universe_name} to STANDBY")
     run_yb_admin(standby_config, "change_xcluster_role STANDBY")
     # Wait for async processing
@@ -286,7 +286,7 @@ def set_standby_role():
 
     get_xcluster_safe_time()
 
-def set_active_role():
+def set_active_role(args):
     log(f"Setting {standby_config.universe_name} to ACTIVE")
     run_yb_admin(standby_config, "change_xcluster_role ACTIVE")
     # Wait for async processing
@@ -313,12 +313,44 @@ def is_replication_drain_done(stream_ids):
         log(result)
     return done
 
-def wait_for_replication_drain():
+def wait_for_replication_drain(args):
     stream_ids = get_cdc_streams()
     log("Waiting for replication drain...")
     while not is_replication_drain_done(stream_ids):
         time.sleep(1)
     log(Color.GREEN+"Successfully completed wait for replication drain")
+
+def get_table_ids(databases):
+    log(f"Getting tables for database(s) {','.join(databases)} from {primary_config.universe_name}")
+    table_ids = []
+    result = run_yb_admin(primary_config, f"list_tables include_table_id include_table_type")
+    for table_and_db in result:
+        match = False
+        for database in databases:
+            pattern = f"^{database}.*(?<!catalog)$"
+            re_match = re.match(pattern, table_and_db)
+            if re_match:
+                match = True
+                break
+        if match:
+            table_ids += [table_and_db.split(' ')[1]]
+    return table_ids
+
+def bootstrap_databases(args):
+    if len(args) != 1:
+        print(Color.RED+"Please provide a CSV list of database names to bootstrap"+Color.RESET)
+        return
+    databases = args[0].split(',')
+    table_ids = get_table_ids(databases)
+
+    if len(table_ids) == 0:
+        raise_exception("No tables found")
+
+    log(f"Bootstrapping {len(table_ids)} tables")
+    # result = run_yb_admin(primary_config, "bootstrap_cdc_producer "+','.join(table_ids))
+    result = ['table id: 00004021000030008000000000004035, CDC bootstrap id: 4c43995201bf4407940722db63603b25', 'table id: 0000402100003000800000000000403a, CDC bootstrap id: 3d650f9c41a14d879814b9a7082f1cf0', 'table id: 0000402100003000800000000000403b, CDC bootstrap id: 0ad088ee24ee4bd6acbbf4d496ea1d33', 'table id: 00004021000030008000000000004025, CDC bootstrap id: 632ad73d59ce4e8fa7ea8ece7c1a8eae', 'table id: 00004021000030008000000000004034, CDC bootstrap id: 1c1d48989db046caa25302b09e3b3b3f', 'table id: 00004021000030008000000000004022, CDC bootstrap id: 676723f07e374d878c3b8613a1a98a4f', 'table id: 0000402100003000800000000000402a, CDC bootstrap id: 457ca696f0e5495894be903b0e6e5833', 'table id: 000033f1000030008000000000004018, CDC bootstrap id: 1a8752bcf85f41239a2d0b15101790f5', 'table id: 000033f100003000800000000000401d, CDC bootstrap id: 8a32f38d2cb8454aa971c79cf2d84ef5', 'table id: 000033f100003000800000000000401e, CDC bootstrap id: f00c05c2b3a64360a35e98f7e8bc448f', 'table id: 000033f1000030008000000000004008, CDC bootstrap id: 66b16e6a48b94fec9a9963f487d77e4f', 'table id: 000033f1000030008000000000004017, CDC bootstrap id: 7381d4058cfb47cd961b86e9056f0741', 'table id: 000033f1000030008000000000004005, CDC bootstrap id: d9b5aeae67364d0eb0bec37b28b316f4', 'table id: 000033f100003000800000000000400d, CDC bootstrap id: 7d3e419ba8d9437e8a264a273f827e5d']
+    print(result)
+
 
 def main():
     # Define a dictionary to map user input to functions
@@ -329,14 +361,15 @@ def main():
         "set_standby_role" : set_standby_role,
         "set_active_role" : set_active_role,
         "get_xcluster_safe_time" : get_xcluster_safe_time,
-        "wait_for_replication_drain" : wait_for_replication_drain
+        "wait_for_replication_drain" : wait_for_replication_drain,
+        "bootstrap_databases" : bootstrap_databases,
     }
 
     usage_str=f"Usage: python3 {sys.argv[0]} <command> [args]\n"\
                 "commands: \n\t"+'\n\t'.join(function_map)+"\n\n" \
                 "'configure' must be run at least once\n"
 
-    if len(sys.argv) != 2:
+    if len(sys.argv) < 2:
         print(usage_str)
         return
 
@@ -354,7 +387,7 @@ def main():
         configure()
 
     if user_input in function_map:
-        function_map[user_input]()
+        function_map[user_input](sys.argv[2:])
     else:
         print("Invalid input")
         print(usage_str)

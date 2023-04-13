@@ -1,10 +1,8 @@
 import datetime
+import os
+from pathlib import Path
+import shutil
 import subprocess
-import sys
-import warnings
-# warnings.filterwarnings(action='ignore',message='Python 3.6 is no longer supported')
-#import paramiko
-from enum import Enum
 import re
 import urllib3
 urllib3.disable_warnings()
@@ -40,55 +38,55 @@ def log_to_file(*values: object):
 
 def raise_exception(message : str):
     log_to_file("Exception:", message)
-    raise Exception(message+Color.RESET)
-
-# def run_remotely_old(command : str, hostname : str, key_filename : str):
-#     # Define the SSH connection parameters
-#     username = 'yugabyte'
-
-#     # Create an SSH client
-#     client = paramiko.SSHClient()
-#     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
-#     try:
-#         print(hostname, username, key_filename)
-#         # Connect to the remote host using the certificate file for authentication
-#         client.connect(hostname, port=54422, username=username, key_filename=key_filename)
-
-#         # Run the command to execute the hello.py script
-#         stdin, stdout, stderr = client.exec_command(command)
-
-#         # Print the output of the command
-#         print(stdout.read().decode())
-
-#     finally:
-#         # Close the SSH connection
-#         client.close()
+    raise Exception(Color.RED+message+Color.RESET)
 
 def http_get(url : str, ca_cert_path : str):
+    # print(url, ca_cert_path)
     response = requests.get(url, verify=ca_cert_path)
     if response.status_code == 200:
         return response.text
     else:
         raise Exception("Failed to fetch data from {url}. Status code:", response.status_code)
 
+def run_subprocess(*command:object):
+    # print(*command)
+    sub_process = subprocess.Popen(*command,
+                       shell=False,
+                       stdout=subprocess.PIPE,
+                       stderr=subprocess.PIPE)
+
+    # streamdata = sub_process.communicate()[0]
+    result = sub_process.stdout.readlines()
+    returncode = sub_process.poll()
+    if returncode != 0:
+        error = sub_process.stderr.readlines()
+        raise_exception(f"{error}")
+    else:
+        lines = []
+        for line in result:
+            lines+=[str(line.decode("utf-8")).strip()]
+        return lines
+
 def run_remotely(hostname : str, key_file : str, command : str):
     ssh_command_str = f"sudo ssh -i {key_file} -ostricthostkeychecking=no -p 54422 yugabyte@{hostname}"
     ssh_command = ssh_command_str.split()
     ssh_command.append(f'{command}')
-    # print (ssh_command)
-    ssh = subprocess.Popen(ssh_command,
-                       shell=False,
-                       stdout=subprocess.PIPE,
-                       stderr=subprocess.PIPE)
-    result = ssh.stdout.readlines()
-    if result == []:
-        error = ssh.stderr.readlines()
-        log("ERROR: %s" % error)
-    else:
-        return result
+    return run_subprocess(ssh_command)
 
+def grant_file_permissions(file_path : str):
+    chmod_command_str = f"sudo chmod +rw {file_path}"
+    return run_subprocess(chmod_command_str.split())
 
-def run_yb_admin(hostname : str, key_file : str, master_addresses: str, command : str):
-    yb_admin_command = f"tserver/bin/yb-admin -master_addresses {master_addresses} --certs_dir_name yugabyte-tls-config/ {command}"
-    return run_remotely(hostname, key_file, yb_admin_command)
+def copy_file_from_remote(hostname : str, key_file : str, from_path : str, to_path : str):
+    scp_command_str = f"sudo scp -P 54422 -i {key_file} yugabyte@{hostname}:{from_path} {to_path}"
+    return run_subprocess(scp_command_str.split())
+
+def copy_file_to_remote(hostname : str, key_file : str, from_path : str, to_path : str):
+    mk_dir_str = f"mkdir -p {os.path.dirname(to_path)}"
+    run_remotely(hostname, key_file, mk_dir_str)
+    scp_command_str = f"sudo scp -P 54422 -i {key_file} {from_path} yugabyte@{hostname}:{to_path}"
+    return run_subprocess(scp_command_str.split())
+
+def move_file(from_path : str, to_path : str):
+    Path(os.path.dirname(to_path)).mkdir(parents=True, exist_ok=True)
+    shutil.move(from_path, to_path)

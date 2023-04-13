@@ -8,6 +8,7 @@ config_file = "config.json"
 
 class UniverseConfig:
     initialized = False
+    universe_uuid = ""
     universe_name = ""
     master_ips = ""
     tserver_ips = ""
@@ -23,7 +24,7 @@ class UniverseConfig:
         if not self.initialized:
             return "not initialized"
 
-        return "{'universe_name': '" + self.universe_name + "', 'master_ips': '" + self.master_ips + "', 'tserver_ips': '" + self.tserver_ips + "', 'pem_file_path': '" + self.pem_file_path + "'}"
+        return "{'universe_name': '" + self.universe_name + "', 'master_ips': '" + str(self.master_ip_map) + "', 'tserver_ips': '" + str(self.tserver_ip_map) + "'}"
 
     def InitMasterInfo(self):
         self.master_ip_map = [ip.strip() for ip in self.master_ips.split(",")]
@@ -45,6 +46,10 @@ class UniverseConfig:
 
 primary_config = UniverseConfig()
 standby_config = UniverseConfig()
+
+def run_yb_admin(config: UniverseConfig, command : str):
+    yb_admin_command = f"tserver/bin/yb-admin -master_addresses {config.master_addresses} --certs_dir_name yugabyte-tls-config/ {command}"
+    return run_remotely(config.master_ip_map[0], config.pem_file_path, yb_admin_command)
 
 def write_config_file():
     # Serialize objects to JSON
@@ -105,67 +110,105 @@ def validate_ip_csv(ip_str : str):
         # Use the ipaddress module to validate if the IP is valid
         ipaddress.ip_address(ip)
 
-def get_universe_name(config : UniverseConfig):
-    log("Getting universe name")
+def get_universe_info(config : UniverseConfig):
+    log("Getting universe info")
     flags = http_get(f"{config.master_web_server_map[0]}varz?raw", config.ca_cert_path)
-    pattern = r"(?<=--metric_node_name=)(.+)-n.+"
-    match = re.search(pattern, flags)
+
+    cluster_uuid_pattern = r"--cluster_uuid=(.+)"
+    match = re.search(cluster_uuid_pattern, flags)
+    if match:
+        config.universe_uuid = match.group(1)
+    else:
+        raise_exception(f"Cannot find universe name for {config.master_addresses}")
+
+    cluster_name_pattern = r"--metric_node_name=yb-\d+-(.+)-n.+"
+    match = re.search(cluster_name_pattern, flags)
     if match:
         config.universe_name = match.group(1)
     else:
         raise_exception(f"Cannot find universe name for {config.master_addresses}")
 
+def get_master_ips(master_ip : str, key_file : str):
+    log(f"Getting master list")
+    result = run_remotely(master_ip, key_file, "cat master/conf/server.conf | grep master_addresses $master_server_conf | awk -F '=' '{print $2}'")
+    if len(result) != 1:
+        raise_exception(f"Cannot find masters list")
+    return ','.join([ip.strip().split(":")[0] for ip in result[0].split(",")])
+
 def get_tserver_ips(config : UniverseConfig):
-    log(f"Getting tserver list for {config.universe_name}")
+    log(f"Getting tserver list")
     ips = []
-    result = run_yb_admin(primary_config.master_ip_map[0],
-        primary_config.pem_file_path, primary_config.master_addresses,  command="list_all_tablet_servers")
+    result = run_yb_admin(config, f"list_all_tablet_servers")
 
     if len(result) <= 0:
-        raise_exception(f"Cannot find tserver list for {primary_config.universe_name}")
+        raise_exception(f"Cannot find tserver list")
 
     for lines in result[1:]:
         match = re.findall("\d+.\d+.\d+.\d+", str(lines.split()[1]))
         if len(match) != 1:
-            raise_exception(f"Cannot find tserver list for {primary_config.universe_name}, {lines}")
+            raise_exception(f"Cannot find tserver list, {lines}")
         ips.append(match[0])
 
     if len(ips) == 0:
-        raise_exception(f"Cannot find tserver list for {primary_config.universe_name}")
+        raise_exception(f"Cannot find tserver list")
 
-    config.tserver_ips = ','.join(ips)
+    return ','.join(ips)
+
+def get_ca_cert(config: UniverseConfig):
+    log("Getting ca.crt")
+    copy_file_from_remote(config.master_ip_map[0], config.pem_file_path, "yugabyte-tls-config/ca.crt" , "ca.crt")
+    grant_file_permissions("ca.crt")
+
+def init_universe(config: UniverseConfig, master_ip : str, key_file : str):
+    config.master_ips = get_master_ips(master_ip, key_file)
+    config.pem_file_path = key_file
+    config.InitMasterInfo()
+    get_ca_cert(config)
+    config.ca_cert_path = "ca.crt"
+    get_universe_info(config)
+    config.ca_cert_path = f"universes/{config.universe_name}/ca.crt"
+    move_file("ca.crt", config.ca_cert_path)
+    config.tserver_ips = get_tserver_ips(config)
+    config.InitTserverInfo()
+    config.initialized=True
+
+def copy_certs(from_config : UniverseConfig, to_config : UniverseConfig):
+    log(f"Copying cert files to {to_config.universe_name}")
+    nodes = set(to_config.master_ip_map).union(set(to_config.tserver_ip_map))
+    for node in nodes:
+        copy_file_to_remote(node, to_config.pem_file_path, from_config.ca_cert_path, f"yugabyte-tls-producer/{from_config.universe_uuid}_repl/ca.crt")
 
 def configure():
-    # master_ips = input("Enter Primary universe master IP csv list: ")
-    # validate_ip_csv(master_ips)
-    # primary_config.master_ips = master_ips
+    # temp code
+    read_config_file()
+
+    # master_ips = input("Enter one Primary universe master IP: ")
+    # ipaddress.ip_address(master_ips)
 
     # pem_file = input("Enter Primary universe ssh cert file path: ")
     # if not os.path.exists(pem_file):
     #     raise_exception("File", pem_file, "not found")
     # primary_config.pem_file_path = pem_file
-    # primary_config.ca_cert_path = "primary_cert/ca.crt"
-    primary_config.InitMasterInfo()
-    get_universe_name(primary_config)
-    get_tserver_ips(primary_config)
-    primary_config.InitTserverInfo()
+    # init_universe(primary_config, primary_config.master_ip_map[0], primary_config.pem_file_path)
 
-    # master_ips = input("Enter Standby universe master IP csv list: ")
-    # validate_ip_csv(master_ips)
+    # master_ips = input("Enter one Secondary universe master IP: ")
+    # ipaddress.ip_address(master_ips)
     # standby_config.master_ips = master_ips
 
     # pem_file = input("Enter Standby universe ssh cert file path: ")
     # if not os.path.exists(pem_file):
     #     raise_exception("File", pem_file, "not found")
     # standby_config.pem_file_path = pem_file
-    # standby_config.ca_cert_path = "standby_cert/ca.crt"
-    standby_config.InitMasterInfo()
-    get_universe_name(standby_config)
-    get_tserver_ips(standby_config)
-    standby_config.InitTserverInfo()
+    # init_universe(standby_config, standby_config.master_ip_map[0], standby_config.pem_file_path)
+
+    copy_certs(primary_config, standby_config)
+    copy_certs(standby_config, primary_config)
 
     write_config_file()
     show_config()
+
+    log(Color.GREEN+"Successfully configured\n")
+    validate_universes()
 
 def show_config():
     log("Primary Universe:")
@@ -196,23 +239,19 @@ def validate_flags(url : str, ca_cert_path : str, required_flags):
 
     for flag in required_flags:
         if flag not in set_flags:
-            raise_exception(f"Required flag {Color.RED}{flag}{Color.RESET} is not set on "+Color.RED+url)
+            raise_exception(f"Required flag {Color.YELLOW}{flag}{Color.RESET} is not set on "+Color.YELLOW+url)
+
+def validate_flags_on_universe(config: UniverseConfig):
+    log(f"Validating flags on {config.universe_name}")
+    for url in config.master_web_server_map:
+        validate_flags(url, config.ca_cert_path, required_master_flags)
+    for url in config.tserver_web_server_map:
+        validate_flags(url, config.ca_cert_path, required_tserver_flags)
 
 def validate_universes():
-    log(f"Validating flags on {primary_config.universe_name}")
-    for url in primary_config.master_web_server_map:
-        validate_flags(url, primary_config.ca_cert_path, required_master_flags)
-    for url in primary_config.tserver_web_server_map:
-        validate_flags(url, primary_config.ca_cert_path, required_tserver_flags)
-
-
-    log(f"Validating flags on {standby_config.universe_name}")
-    for url in standby_config.master_web_server_map:
-        validate_flags(url, standby_config.ca_cert_path, required_master_flags)
-    for url in standby_config.tserver_web_server_map:
-        validate_flags(url, standby_config.ca_cert_path, required_tserver_flags)
-
-    log(Color.GREEN + "Universe validation Successful")
+    validate_flags_on_universe(primary_config)
+    validate_flags_on_universe(standby_config)
+    log(Color.GREEN + "Universe validation successful")
 
 def main():
     # Define a dictionary to map user input to functions
@@ -228,16 +267,18 @@ def main():
         print(usage_str)
         return
 
-    read_config_file()
-
     user_input = sys.argv[1]
 
     log_to_file(' '.join(sys.argv))
 
+    if user_input == "configure":
+        configure()
+        return
+
+    read_config_file()
+
     if not is_configured():
         configure()
-        if user_input == "configure":
-            return
 
     if user_input in function_map:
         function_map[user_input]()

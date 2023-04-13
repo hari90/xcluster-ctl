@@ -129,6 +129,7 @@ dmypy.json
 .pyre/
 
 
+*.crt
 xcluster_ctl_log.txt
 config.json
 universes/

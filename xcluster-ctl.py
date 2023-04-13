@@ -2,9 +2,11 @@ import ipaddress
 import json
 import os
 import sys
+import time
 from utils import *
 
 config_file = "config.json"
+ca_file = "ca.crt"
 
 class UniverseConfig:
     initialized = False
@@ -155,19 +157,19 @@ def get_tserver_ips(config : UniverseConfig):
     return ','.join(ips)
 
 def get_ca_cert(config: UniverseConfig):
-    log("Getting ca.crt")
-    copy_file_from_remote(config.master_ip_map[0], config.pem_file_path, "yugabyte-tls-config/ca.crt" , "ca.crt")
-    grant_file_permissions("ca.crt")
+    log(f"Getting {ca_file}")
+    copy_file_from_remote(config.master_ip_map[0], config.pem_file_path, f"yugabyte-tls-config/{ca_file}" , ca_file)
+    grant_file_permissions(ca_file)
 
 def init_universe(config: UniverseConfig, master_ip : str, key_file : str):
     config.master_ips = get_master_ips(master_ip, key_file)
     config.pem_file_path = key_file
     config.InitMasterInfo()
     get_ca_cert(config)
-    config.ca_cert_path = "ca.crt"
+    config.ca_cert_path = ca_file
     get_universe_info(config)
-    config.ca_cert_path = f"universes/{config.universe_name}/ca.crt"
-    move_file("ca.crt", config.ca_cert_path)
+    config.ca_cert_path = f"universes/{config.universe_name}/{ca_file}"
+    move_file(ca_file, config.ca_cert_path)
     config.tserver_ips = get_tserver_ips(config)
     config.InitTserverInfo()
     config.initialized=True
@@ -176,7 +178,7 @@ def copy_certs(from_config : UniverseConfig, to_config : UniverseConfig):
     log(f"Copying cert files to {to_config.universe_name}")
     nodes = set(to_config.master_ip_map).union(set(to_config.tserver_ip_map))
     for node in nodes:
-        copy_file_to_remote(node, to_config.pem_file_path, from_config.ca_cert_path, f"yugabyte-tls-producer/{from_config.universe_uuid}_repl/ca.crt")
+        copy_file_to_remote(node, to_config.pem_file_path, from_config.ca_cert_path, f"yugabyte-tls-producer/{from_config.universe_uuid}_repl/{ca_file}")
 
 def configure():
     # temp code
@@ -253,15 +255,60 @@ def validate_universes():
     validate_flags_on_universe(standby_config)
     log(Color.GREEN + "Universe validation successful")
 
+def get_xcluster_safe_time_int():
+    log(f"Getting xcluster_safe_time from {standby_config.universe_name}\n")
+    xcluster_safe_time = run_yb_admin(standby_config, "get_xcluster_safe_time")
+    namespace_id = ""
+    uninitialized_safe_time : bool = len(xcluster_safe_time) == 0
+    for line in xcluster_safe_time:
+        value = line.split('":')
+        if len(value) > 1:
+            value = value[1].strip().replace('"','').replace(',','')
+        if 'namespace_id"' in line:
+            namespace_id=value
+        if 'safe_time"' in line:
+            log(f"namespace_id= {namespace_id}\nsafe_time= {value}")
+            if "2023-" not in value:
+                uninitialized_safe_time=True
+    return uninitialized_safe_time
+
+
+def get_xcluster_safe_time():
+    while get_xcluster_safe_time_int():
+        log(Color.YELLOW+"Some xcluster_safe_time are not initialized. Waiting...\n")
+        time.sleep(2)
+    log("\n"+Color.GREEN+"Successfully got xcluster_safe_time")
+
+def set_standby_role():
+    log(f"Setting {standby_config.universe_name} to STANDBY")
+    run_yb_admin(standby_config, "change_xcluster_role STANDBY")
+    # Wait for async processing
+    time.sleep(2)
+    log(Color.GREEN+"Successfully set role to STANDBY")
+
+    get_xcluster_safe_time()
+
+def set_active_role():
+    log(f"Setting {standby_config.universe_name} to ACTIVE")
+    run_yb_admin(standby_config, "change_xcluster_role ACTIVE")
+    # Wait for async processing
+    time.sleep(2)
+    log(Color.GREEN+"Successfully set role to ACTIVE")
+
 def main():
     # Define a dictionary to map user input to functions
     function_map = {
         "configure": configure,
         "show_config":show_config,
-        "validate_universes": validate_universes
+        "validate_universes": validate_universes,
+        "set_standby_role" : set_standby_role,
+        "set_active_role" : set_active_role,
+        "get_xcluster_safe_time" : get_xcluster_safe_time,
     }
 
-    usage_str=f"Usage: python3 {sys.argv[0]} [{' '.join(function_map)}]"
+    usage_str=f"Usage: python3 {sys.argv[0]} <command> [args]\n"\
+                "commands: \n\t"+'\n\t'.join(function_map)+"\n\n" \
+                "'configure' must be run at least once\n"
 
     if len(sys.argv) != 2:
         print(usage_str)

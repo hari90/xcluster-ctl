@@ -49,7 +49,7 @@ def http_get(url : str, ca_cert_path : str):
         raise Exception("Failed to fetch data from {url}. Status code:", response.status_code)
 
 def run_subprocess(*command:object):
-    # print(*command)
+    # print(' '.join(*command))
     sub_process = subprocess.Popen(*command,
                        shell=False,
                        stdout=subprocess.PIPE,

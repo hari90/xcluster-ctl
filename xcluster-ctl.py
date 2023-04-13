@@ -199,6 +199,9 @@ def configure(args):
         raise_exception(f"File {pem_file} not found")
     init_universe(standby_config, master_ips, pem_file)
 
+    if primary_config.universe_uuid == standby_config.universe_uuid:
+        raise_exception("Both universes are the same")
+
     copy_certs(primary_config, standby_config)
     copy_certs(standby_config, primary_config)
 
@@ -206,7 +209,7 @@ def configure(args):
     show_config([])
 
     log(Color.GREEN+"Successfully configured\n")
-    validate_universes()
+    validate_universes([])
 
 def show_config(args):
     log("Primary Universe:")
@@ -283,7 +286,7 @@ def set_standby_role(args):
     time.sleep(2)
     log(Color.GREEN+"Successfully set role to STANDBY")
 
-    get_xcluster_safe_time()
+    get_xcluster_safe_time([])
 
 def set_active_role(args):
     log(f"Setting {standby_config.universe_name} to ACTIVE")
@@ -398,12 +401,31 @@ def setup_replication_with_bootstrap(args):
     if len(primary_config.bootstrap_ids) == 0:
         bootstrap_databases(args)
 
-    log(f"Setting up replication from {primary_config.universe_name} to {standby_config.universe_name}")
+    log(f"Setting up replication from {primary_config.universe_name} to {standby_config.universe_name} with bootstrap")
 
     result = run_yb_admin(standby_config, f"setup_universe_replication {primary_config.universe_uuid}_repl {primary_config.master_addresses} {','.join(primary_config.bootstrap_table_ids)} {','.join(primary_config.bootstrap_ids)}")
     log('\n'.join(result))
 
     clear_bootstrap_from_config()
+
+    log(Color.GREEN+"Successfully setup replication")
+
+def setup_replication_without_bootstrap(args):
+    if len(primary_config.bootstrap_ids) > 0:
+        raise_exception("There is already an available bootstrap. Run setup_replication_with_bootstrap")
+
+    log(f"Setting up replication from {primary_config.universe_name} to {standby_config.universe_name} without bootstrap")
+
+    if len(args) != 1:
+        raise_exception("Please provide a CSV list of database names to bootstrap")
+    databases = args[0].split(',')
+    table_ids = get_table_ids(databases)
+
+    if len(table_ids) == 0:
+        raise_exception("No tables found")
+
+    result = run_yb_admin(standby_config, f"setup_universe_replication {primary_config.universe_uuid}_repl {primary_config.master_addresses} {','.join(table_ids)}")
+    log('\n'.join(result))
 
     log(Color.GREEN+"Successfully setup replication")
 
@@ -419,13 +441,14 @@ def main():
         "configure": configure,
         "show_config":show_config,
         "validate_universes": validate_universes,
+        "setup_replication_without_bootstrap" : setup_replication_without_bootstrap,
+        "setup_replication_with_bootstrap" : setup_replication_with_bootstrap,
         "set_standby_role" : set_standby_role,
         "set_active_role" : set_active_role,
         "get_xcluster_safe_time" : get_xcluster_safe_time,
         "wait_for_replication_drain" : wait_for_replication_drain,
         "bootstrap_databases" : bootstrap_databases,
         "clear_bootstrap" : clear_bootstrap,
-        "setup_replication_with_bootstrap" : setup_replication_with_bootstrap,
         "delete_replication" : delete_replication,
     }
 

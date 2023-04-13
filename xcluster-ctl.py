@@ -182,26 +182,23 @@ def copy_certs(from_config : UniverseConfig, to_config : UniverseConfig):
 
 def configure():
     # temp code
-    read_config_file()
+    # read_config_file()
 
-    # master_ips = input("Enter one Primary universe master IP: ")
-    # ipaddress.ip_address(master_ips)
+    master_ips = input("Enter one Primary universe master IP: ")
+    ipaddress.ip_address(master_ips)
 
-    # pem_file = input("Enter Primary universe ssh cert file path: ")
-    # if not os.path.exists(pem_file):
-    #     raise_exception("File", pem_file, "not found")
-    # primary_config.pem_file_path = pem_file
-    # init_universe(primary_config, primary_config.master_ip_map[0], primary_config.pem_file_path)
+    pem_file = input("Enter Primary universe ssh cert file path: ")
+    if not os.path.exists(pem_file):
+        raise_exception(f"File {pem_file} not found")
+    init_universe(primary_config, master_ips, pem_file)
 
-    # master_ips = input("Enter one Secondary universe master IP: ")
-    # ipaddress.ip_address(master_ips)
-    # standby_config.master_ips = master_ips
+    master_ips = input("Enter one Secondary universe master IP: ")
+    ipaddress.ip_address(master_ips)
 
-    # pem_file = input("Enter Standby universe ssh cert file path: ")
-    # if not os.path.exists(pem_file):
-    #     raise_exception("File", pem_file, "not found")
-    # standby_config.pem_file_path = pem_file
-    # init_universe(standby_config, standby_config.master_ip_map[0], standby_config.pem_file_path)
+    pem_file = input("Enter Standby universe ssh cert file path: ")
+    if not os.path.exists(pem_file):
+        raise_exception(f"File {pem_file} not found")
+    init_universe(standby_config, master_ips, pem_file)
 
     copy_certs(primary_config, standby_config)
     copy_certs(standby_config, primary_config)
@@ -257,6 +254,7 @@ def validate_universes():
 
 def get_xcluster_safe_time_int():
     log(f"Getting xcluster_safe_time from {standby_config.universe_name}\n")
+    log(f"Current_time:\t\t{datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%s')}")
     xcluster_safe_time = run_yb_admin(standby_config, "get_xcluster_safe_time")
     namespace_id = ""
     uninitialized_safe_time : bool = len(xcluster_safe_time) == 0
@@ -267,7 +265,7 @@ def get_xcluster_safe_time_int():
         if 'namespace_id"' in line:
             namespace_id=value
         if 'safe_time"' in line:
-            log(f"namespace_id= {namespace_id}\nsafe_time= {value}")
+            log(f"\nnamespace_id:\t\t{namespace_id}\nxcluster_safe_time:\t{value}")
             if "2023-" not in value:
                 uninitialized_safe_time=True
     return uninitialized_safe_time
@@ -295,6 +293,33 @@ def set_active_role():
     time.sleep(2)
     log(Color.GREEN+"Successfully set role to ACTIVE")
 
+def get_cdc_streams():
+    log("Getting replication streams")
+    data = run_yb_admin(primary_config, "list_cdc_streams")
+    stream_ids = []
+    for line in data:
+        if 'stream_id:' in line:
+            stream_id = line.split(':')[-1].strip().strip('"')
+            stream_ids.append(stream_id)
+    log(f"Found {len(stream_ids)} replication streams")
+    return stream_ids
+
+def is_replication_drain_done(stream_ids):
+    result = ''.join(run_yb_admin(primary_config, "wait_for_replication_drain "+','.join(stream_ids)))
+    done = "undrained" not in result
+    if not done:
+        log(Color.YELLOW+result)
+    else:
+        log(result)
+    return done
+
+def wait_for_replication_drain():
+    stream_ids = get_cdc_streams()
+    log("Waiting for replication drain...")
+    while not is_replication_drain_done(stream_ids):
+        time.sleep(1)
+    log(Color.GREEN+"Successfully completed wait for replication drain")
+
 def main():
     # Define a dictionary to map user input to functions
     function_map = {
@@ -304,6 +329,7 @@ def main():
         "set_standby_role" : set_standby_role,
         "set_active_role" : set_active_role,
         "get_xcluster_safe_time" : get_xcluster_safe_time,
+        "wait_for_replication_drain" : wait_for_replication_drain
     }
 
     usage_str=f"Usage: python3 {sys.argv[0]} <command> [args]\n"\

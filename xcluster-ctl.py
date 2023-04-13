@@ -95,6 +95,9 @@ def read_config_file():
 def is_configured():
     return primary_config.initialized and standby_config.initialized
 
+def print_header():
+    log(f"[ {Color.BLUE}{primary_config.universe_name}{Color.RESET} -> {Color.BLUE}{standby_config.universe_name}{Color.RESET} ]")
+
 def validate_ip_csv(ip_str : str):
     """
     Validate if a list is a CSV of IP addresses.
@@ -278,6 +281,20 @@ def get_xcluster_safe_time_int():
                 uninitialized_safe_time=True
     return uninitialized_safe_time
 
+def get_xcluster_estimated_data_loss(args):
+    log(f"Getting estimated data loss from {standby_config.universe_name}")
+    xcluster_safe_time = run_yb_admin(standby_config, "get_xcluster_estimated_data_loss")
+    namespace_id = ""
+    for line in xcluster_safe_time:
+        value = line.split('":')
+        if len(value) > 1:
+            value = value[1].strip().replace('"','').replace(',','')
+        if 'namespace_id"' in line:
+            log(f"\nnamespace_id:\t\t{value}")
+        if 'data_loss_sec"' in line:
+            log(f"data_loss_sec:\t\t{value}")
+
+    log("\n"+Color.GREEN+"Successfully got estimated data loss")
 
 def get_xcluster_safe_time(args):
     while get_xcluster_safe_time_int():
@@ -456,6 +473,18 @@ def delete_replication(args):
     log('\n'.join(result))
     log(Color.GREEN+"Successfully deleted replication")
 
+def pause_replication(args):
+    log(f"Pausing replication from {primary_config.universe_name} to {standby_config.universe_name}")
+    result = run_yb_admin(standby_config, f"set_universe_replication_enabled {primary_config.universe_uuid}_repl 0")
+    log('\n'.join(result))
+    log(Color.GREEN+"Successfully paused replication")
+
+def resume_replication(args):
+    log(f"Resuming replication from {primary_config.universe_name} to {standby_config.universe_name}")
+    result = run_yb_admin(standby_config, f"set_universe_replication_enabled {primary_config.universe_uuid}_repl 1")
+    log('\n'.join(result))
+    log(Color.GREEN+"Successfully resumed replication")
+
 def swap_universe_configs(args):
     log(f"Swapping Primay and Standby universes")
     global standby_config, primary_config
@@ -464,7 +493,7 @@ def swap_universe_configs(args):
     primary_config = temp
 
     write_config_file()
-    show_config(args)
+    print_header()
 
 def planned_failover(args):
     log(f"Performing a planned failover from {primary_config.universe_name} to {standby_config.universe_name}")
@@ -478,6 +507,30 @@ def planned_failover(args):
     delete_replication(args)
     swap_universe_configs(args)
     setup_replication_with_bootstrap(args)
+
+    log(Color.GREEN+f"Successfully failed over from {primary_config.universe_name} to {standby_config.universe_name}")
+
+def unplanned_failover(args):
+    log(f"Performing a unplanned failover from {primary_config.universe_name} to {standby_config.universe_name}")
+    pause_replication(args)
+    get_xcluster_estimated_data_loss(args)
+    get_xcluster_safe_time(args)
+    proceed = input("Are you sure you want to proceed? (yes/no): ")
+    if proceed.lower() not in ["yes","y"]:
+        log(Color.YELLOW+"Planned failover abandoned")
+        return
+
+    log(Color.YELLOW+"\nUse YBA to restore the databases to the xcluster safe time\n")
+    proceed = input("Did the point in time restore complete? (yes/no): ")
+    if proceed.lower() not in ["yes","y"]:
+        log(Color.YELLOW+"Planned failover abandoned")
+        return
+
+    set_active_role(args)
+    delete_replication(args)
+    swap_universe_configs(args)
+
+    log(Color.YELLOW+f"\nOnce {standby_config.universe_name} comes back online drop its database and recreate the database schema. Then use YBA to setup replication with backup and restore. After it completes run set_standby_role\n")
 
     log(Color.GREEN+f"Successfully failed over from {primary_config.universe_name} to {standby_config.universe_name}")
 
@@ -507,12 +560,16 @@ def main():
         "set_active_role" : set_active_role,
         "get_xcluster_safe_time" : get_xcluster_safe_time,
         "planned_failover" : planned_failover,
+        "unplanned_failover" : unplanned_failover,
         "wait_for_replication_drain" : wait_for_replication_drain,
         "bootstrap_databases" : bootstrap_databases,
         "clear_bootstrap" : clear_bootstrap,
         "delete_replication" : delete_replication,
         "reload_roles" : reload_roles,
         "switch_universe_configs" : swap_universe_configs,
+        "get_xcluster_estimated_data_loss" : get_xcluster_estimated_data_loss,
+        "pause_replication" : pause_replication,
+        "resume_replication" : resume_replication,
     }
 
     usage_str=f"Usage: python3 {sys.argv[0]} <command> [args]\n"\
@@ -536,7 +593,7 @@ def main():
     if not is_configured():
         configure([])
 
-    log(f"[ {Color.BLUE}{primary_config.universe_name}{Color.RESET} -> {Color.BLUE}{standby_config.universe_name}{Color.RESET} ]")
+    print_header()
     if user_input in function_map:
         function_map[user_input](sys.argv[2:])
     else:

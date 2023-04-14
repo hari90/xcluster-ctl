@@ -246,8 +246,10 @@ required_common_flags = {
     "consensus_max_batch_size_bytes=1048576",
     "rpc_throttle_threshold_bytes=524288",
     "ysql_num_shards_per_tserver=3",
-    # "yb_client_admin_operation_timeout_sec=600",
-    "cdc_consumer_handler_thread_pool_size=200"
+    "cdc_consumer_handler_thread_pool_size=200",
+    # Optional flags
+    # db_block_cache_size_percentage=20,
+    # yb_client_admin_operation_timeout_sec=600,
 }
 
 required_master_flags = required_common_flags.union({
@@ -258,19 +260,19 @@ required_master_flags = required_common_flags.union({
 
 required_tserver_flags = required_common_flags
 
-def validate_flags(url : str, ca_cert_path : str, required_flags):
+def validate_flags(url : str, ca_cert_path : str, required_flags, universe_name : str):
     set_flags = get_flags(url, ca_cert_path)
 
     for flag in required_flags:
         if flag not in set_flags:
-            raise_exception(f"Required flag {Color.YELLOW}{flag}{Color.RESET} is not set on "+Color.YELLOW+url)
+            raise_exception(f"Required flag {Color.YELLOW}{flag}{Color.RESET} is not set on {Color.YELLOW}{universe_name} {url}")
 
 def validate_flags_on_universe(config: UniverseConfig):
     log(f"Validating flags on {config.universe_name}")
     for url in config.master_web_server_map:
-        validate_flags(url, config.ca_cert_path, required_master_flags)
+        validate_flags(url, config.ca_cert_path, required_master_flags, config.universe_name)
     for url in config.tserver_web_server_map:
-        validate_flags(url, config.ca_cert_path, required_tserver_flags)
+        validate_flags(url, config.ca_cert_path, required_tserver_flags, config.universe_name)
 
 def validate_universes(args):
     validate_flags_on_universe(primary_config)
@@ -565,6 +567,57 @@ def add_table(args):
 def remove_table(args):
     log("Coming soon")
 
+def extract_consumer_registry(data: str):
+    lines = data.splitlines()
+    role = "ACTIVE"
+    universe_uuid = ""
+    replication_name = ""
+    in_consumer_registry = False
+    stream_count = 0
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        i = i + 1
+        if "consumer_registry" in line:
+            in_consumer_registry = True
+        if not in_consumer_registry:
+            continue
+
+        if "role: STANDBY" in line:
+            role="STANDBY"
+
+        if "producer_map" in line:
+            if universe_uuid is not "":
+                raise_exception("Multiple replication groups found. Only one replication group is supported")
+            line = lines[i]
+            i = i + 1
+            replication_key_pattern = r'key: "(.*)_(.*)"'
+            match = re.search(replication_key_pattern, line)
+            if match:
+                universe_uuid = match.group(1)
+                replication_name = match.group(2)
+            else:
+                raise_exception(f"Cannot parse replication key {line}")
+            if universe_uuid != primary_config.universe_uuid:
+                raise_exception(f"Expected replication from {primary_config.universe_name} {primary_config.universe_uuid}, but found {universe_uuid}. Rerun 'configure' with the correct Primary and Standby universes")
+
+        if "stream_map" in line:
+            stream_count+=1
+
+    if replication_name is "" or stream_count == 0:
+        raise_exception("No replication in progress")
+
+    return replication_name, stream_count, role
+
+
+def get_replication_info(args):
+    log("Getting current replication info")
+    result = http_get(f"{standby_config.master_web_server_map[0]}xcluster-config", standby_config.ca_cert_path)
+    replication_name, stream_count, role = extract_consumer_registry(result)
+    log(f"{Color.GREEN}Found replication group {Color.YELLOW}{replication_name}{Color.GREEN} with {Color.YELLOW}{stream_count}{Color.GREEN} tables")
+    if role is not "STANDBY":
+        log(f"{Color.RED}STANDBY role has not been set on {Color.RESET}{standby_config.universe_name}{Color.RED}. Please run 'set_standby_role'")
+
 def main():
     # Define a dictionary to map user input to functions
     function_map = {
@@ -573,6 +626,7 @@ def main():
         "validate_universes": validate_universes,
         "setup_replication" : setup_replication,
         "setup_replication_with_bootstrap" : setup_replication_with_bootstrap,
+        "get_replication_info" : get_replication_info,
         "set_standby_role" : set_standby_role,
         "set_active_role" : set_active_role,
         "get_xcluster_safe_time" : get_xcluster_safe_time,

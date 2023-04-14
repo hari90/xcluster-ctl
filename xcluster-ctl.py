@@ -484,8 +484,9 @@ def setup_replication(args):
     set_standby_role(args)
 
 def delete_replication(args):
-    log(f"Deleting replication from {primary_config.universe_name} to {standby_config.universe_name}")
-    result = run_yb_admin(standby_config, f"delete_universe_replication {primary_config.universe_uuid}_repl")
+    replication_name, stream_count, role = get_replication_info_int()
+    log(f"Deleting replication {replication_name} from {primary_config.universe_name} to {standby_config.universe_name}")
+    result = run_yb_admin(standby_config, f"delete_universe_replication {primary_config.universe_uuid}_{replication_name}")
     log('\n'.join(result))
     log(Color.GREEN+"Successfully deleted replication")
 
@@ -610,10 +611,13 @@ def extract_consumer_registry(data: str):
     return replication_name, stream_count, role
 
 
-def get_replication_info(args):
+def get_replication_info_int():
     log("Getting current replication info")
     result = http_get(f"{standby_config.master_web_server_map[0]}xcluster-config", standby_config.ca_cert_path)
-    replication_name, stream_count, role = extract_consumer_registry(result)
+    return extract_consumer_registry(result)
+
+def get_replication_info(args):
+    replication_name, stream_count, role = get_replication_info_int()
     log(f"{Color.GREEN}Found replication group {Color.YELLOW}{replication_name}{Color.GREEN} with {Color.YELLOW}{stream_count}{Color.GREEN} tables")
     if role is not "STANDBY":
         log(f"{Color.RED}STANDBY role has not been set on {Color.RESET}{standby_config.universe_name}{Color.RED}. Please run 'set_standby_role'")

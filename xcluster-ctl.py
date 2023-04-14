@@ -132,9 +132,9 @@ def get_universe_info(config : UniverseConfig):
     if match:
         config.universe_uuid = match.group(1)
     else:
-        raise_exception(f"Cannot find universe name for {config.master_addresses}")
+        raise_exception(f"Cannot find universe uuid for {config.master_addresses}")
 
-    cluster_name_pattern = r"--metric_node_name=yb-\d+-(.+)-n.+"
+    cluster_name_pattern = r"--metric_node_name=(.+)-n.+"
     match = re.search(cluster_name_pattern, flags)
     if match:
         config.universe_name = match.group(1)

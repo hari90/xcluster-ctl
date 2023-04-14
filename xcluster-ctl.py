@@ -252,7 +252,8 @@ required_common_flags = {
 
 required_master_flags = required_common_flags.union({
     "enable_automatic_tablet_splitting=false",
-    "enable_tablet_split_of_xcluster_replicated_tables=false"
+    "enable_tablet_split_of_xcluster_replicated_tables=false",
+    "cdc_wal_retention_time_secs=900"
 })
 
 required_tserver_flags = required_common_flags

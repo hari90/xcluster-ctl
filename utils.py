@@ -67,8 +67,8 @@ def run_subprocess(*command:object):
             lines+=[str(line.decode("utf-8")).strip()]
         return lines
 
-def run_remotely(hostname : str, key_file : str, command : str):
-    ssh_command_str = f"sudo ssh -i {key_file} -ostricthostkeychecking=no -p 54422 yugabyte@{hostname}"
+def run_remotely(hostname : str, ssh_port: int, key_file : str, command : str):
+    ssh_command_str = f"sudo ssh -i {key_file} -ostricthostkeychecking=no -p {ssh_port} yugabyte@{hostname}"
     ssh_command = ssh_command_str.split()
     ssh_command.append(f'{command}')
     return run_subprocess(ssh_command)
@@ -77,16 +77,20 @@ def grant_file_permissions(file_path : str):
     chmod_command_str = f"sudo chmod +rw {file_path}"
     return run_subprocess(chmod_command_str.split())
 
-def copy_file_from_remote(hostname : str, key_file : str, from_path : str, to_path : str):
-    scp_command_str = f"sudo scp -P 54422 -i {key_file} yugabyte@{hostname}:{from_path} {to_path}"
+def copy_file_from_remote(hostname : str, ssh_port: int, key_file : str, from_path : str, to_path : str):
+    scp_command_str = f"sudo scp -P {ssh_port} -i {key_file} yugabyte@{hostname}:{from_path} {to_path}"
     return run_subprocess(scp_command_str.split())
 
-def copy_file_to_remote(hostname : str, key_file : str, from_path : str, to_path : str):
+def copy_file_to_remote(hostname : str, ssh_port: int, key_file : str, from_path : str, to_path : str):
     mk_dir_str = f"mkdir -p {os.path.dirname(to_path)}"
-    run_remotely(hostname, key_file, mk_dir_str)
-    scp_command_str = f"sudo scp -P 54422 -i {key_file} {from_path} yugabyte@{hostname}:{to_path}"
+    run_remotely(hostname, ssh_port, key_file, mk_dir_str)
+    scp_command_str = f"sudo scp -P {ssh_port} -i {key_file} {from_path} yugabyte@{hostname}:{to_path}"
     return run_subprocess(scp_command_str.split())
 
 def move_file(from_path : str, to_path : str):
     Path(os.path.dirname(to_path)).mkdir(parents=True, exist_ok=True)
     shutil.move(from_path, to_path)
+
+def is_input_yes(question : str):
+    answer = input(f"{question}? (yes/no): ")
+    return answer.lower() in ["yes","y"]

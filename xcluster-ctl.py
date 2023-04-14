@@ -16,6 +16,7 @@ class UniverseConfig:
     tserver_ips = ""
     pem_file_path = ""
     ca_cert_path = ""
+    ssh_port = 0
     master_addresses = ""
     master_ip_map = []
     master_web_server_map = []
@@ -55,7 +56,7 @@ standby_config = UniverseConfig()
 
 def run_yb_admin(config: UniverseConfig, command : str):
     yb_admin_command = f"tserver/bin/yb-admin -master_addresses {config.master_addresses} --certs_dir_name yugabyte-tls-config/ {command}"
-    return run_remotely(config.master_ip_map[0], config.pem_file_path, yb_admin_command)
+    return run_remotely(config.master_ip_map[0], config.ssh_port, config.pem_file_path, yb_admin_command)
 
 def write_config_file():
     # Serialize objects to JSON
@@ -140,9 +141,9 @@ def get_universe_info(config : UniverseConfig):
     else:
         raise_exception(f"Cannot find universe name for {config.master_addresses}")
 
-def get_master_ips(master_ip : str, key_file : str):
+def get_master_ips(master_ip : str, ssh_port: int, key_file : str):
     log(f"Getting master list")
-    result = run_remotely(master_ip, key_file, "cat master/conf/server.conf | grep master_addresses $master_server_conf | awk -F '=' '{print $2}'")
+    result = run_remotely(master_ip, ssh_port, key_file, "cat master/conf/server.conf | grep master_addresses $master_server_conf | awk -F '=' '{print $2}'")
     if len(result) != 1:
         raise_exception(f"Cannot find masters list")
     return ','.join([ip.strip().split(":")[0] for ip in result[0].split(",")])
@@ -168,11 +169,12 @@ def get_tserver_ips(config : UniverseConfig):
 
 def get_ca_cert(config: UniverseConfig):
     log(f"Getting {ca_file}")
-    copy_file_from_remote(config.master_ip_map[0], config.pem_file_path, f"yugabyte-tls-config/{ca_file}" , ca_file)
+    copy_file_from_remote(config.master_ip_map[0], config.ssh_port, config.pem_file_path, f"yugabyte-tls-config/{ca_file}" , ca_file)
     grant_file_permissions(ca_file)
 
-def init_universe(config: UniverseConfig, master_ip : str, key_file : str):
-    config.master_ips = get_master_ips(master_ip, key_file)
+def init_universe(config: UniverseConfig, master_ip : str, ssh_port : int, key_file : str):
+    config.master_ips = get_master_ips(master_ip, ssh_port, key_file)
+    config.ssh_port = ssh_port
     config.pem_file_path = key_file
     config.InitMasterInfo()
     get_ca_cert(config)
@@ -188,24 +190,37 @@ def copy_certs(from_config : UniverseConfig, to_config : UniverseConfig):
     log(f"Copying cert files to {to_config.universe_name}")
     nodes = set(to_config.master_ip_map).union(set(to_config.tserver_ip_map))
     for node in nodes:
-        copy_file_to_remote(node, to_config.pem_file_path, from_config.ca_cert_path, f"yugabyte-tls-producer/{from_config.universe_uuid}_repl/{ca_file}")
+        copy_file_to_remote(node, to_config.ssh_port, to_config.pem_file_path, from_config.ca_cert_path, f"yugabyte-tls-producer/{from_config.universe_uuid}_repl/{ca_file}")
 
-def configure(args):
-    master_ips = input("Enter one Primary universe master IP: ")
-    ipaddress.ip_address(master_ips)
+def get_cluster_config_from_user(cluster_type : str):
+    ssh_port_str = input(f"Enter {cluster_type} universe ssh port (default is 54422): ")
+    if ssh_port_str.strip() == "":
+        ssh_port = 54422
+    else:
+        ssh_port = int(ssh_port_str)
+        if ssh_port <= 0:
+            raise_exception("Invalid port number")
 
-    pem_file = input("Enter Primary universe ssh cert file path: ")
+    pem_file = input(f"Enter {cluster_type} universe ssh cert file path: ")
     if not os.path.exists(pem_file):
         raise_exception(f"File {pem_file} not found")
-    init_universe(primary_config, master_ips, pem_file)
+
+    return ssh_port, pem_file
+
+def configure(args):
+    master_ips = input(f"Enter one Primary universe master IP: ")
+    ipaddress.ip_address(master_ips)
+
+    ssh_port, pem_file = get_cluster_config_from_user("Primary")
+    init_universe(primary_config, master_ips, ssh_port, pem_file)
 
     master_ips = input("Enter one Secondary universe master IP: ")
     ipaddress.ip_address(master_ips)
 
-    pem_file = input("Enter Standby universe ssh cert file path: ")
-    if not os.path.exists(pem_file):
-        raise_exception(f"File {pem_file} not found")
-    init_universe(standby_config, master_ips, pem_file)
+    log(f"\nssh port:\t\t{ssh_port}\nssh cert file path:\t{pem_file}")
+    if not is_input_yes("Do you want to use these settings for the Seconday universe as well"):
+        ssh_port, pem_file = get_cluster_config_from_user("Seconday")
+    init_universe(standby_config, master_ips, ssh_port, pem_file)
 
     if primary_config.universe_uuid == standby_config.universe_uuid:
         raise_exception("Both universes are the same")
@@ -214,8 +229,6 @@ def configure(args):
     copy_certs(standby_config, primary_config)
 
     reload_roles(args)
-
-    show_config(args)
 
     log(Color.GREEN+"Successfully configured\n")
     validate_universes([])
@@ -499,8 +512,7 @@ def planned_failover(args):
     log(f"Performing a planned failover from {primary_config.universe_name} to {standby_config.universe_name}")
     wait_for_replication_drain(args)
     get_xcluster_safe_time(args)
-    proceed = input("Are you sure you want to proceed? (yes/no): ")
-    if proceed.lower() not in ["yes","y"]:
+    if not is_input_yes("Are you sure you want to proceed"):
         log(Color.YELLOW+"Planned failover abandoned")
         return
     set_active_role(args)
@@ -508,21 +520,19 @@ def planned_failover(args):
     swap_universe_configs(args)
     setup_replication_with_bootstrap(args)
 
-    log(Color.GREEN+f"Successfully failed over from {primary_config.universe_name} to {standby_config.universe_name}")
+    log(Color.GREEN+f"Successfully failed over from {standby_config.universe_name} to {primary_config.universe_name}")
 
 def unplanned_failover(args):
     log(f"Performing a unplanned failover from {primary_config.universe_name} to {standby_config.universe_name}")
     pause_replication(args)
     get_xcluster_estimated_data_loss(args)
     get_xcluster_safe_time(args)
-    proceed = input("Are you sure you want to proceed? (yes/no): ")
-    if proceed.lower() not in ["yes","y"]:
+    if not is_input_yes("Are you sure you want to proceed"):
         log(Color.YELLOW+"Planned failover abandoned")
         return
 
     log(Color.YELLOW+"\nUse YBA to restore the databases to the xcluster safe time\n")
-    proceed = input("Did the point in time restore complete? (yes/no): ")
-    if proceed.lower() not in ["yes","y"]:
+    if not is_input_yes("Did the point in time restore complete"):
         log(Color.YELLOW+"Planned failover abandoned")
         return
 
@@ -532,7 +542,7 @@ def unplanned_failover(args):
 
     log(Color.YELLOW+f"\nOnce {standby_config.universe_name} comes back online drop its database and recreate the database schema. Then use YBA to setup replication with backup and restore. After it completes run set_standby_role\n")
 
-    log(Color.GREEN+f"Successfully failed over from {primary_config.universe_name} to {standby_config.universe_name}")
+    log(Color.GREEN+f"Successfully failed over from {standby_config.universe_name} to {primary_config.universe_name}")
 
 def reload_roles(args):
     if is_standy_role(primary_config):
@@ -548,6 +558,12 @@ def reload_roles(args):
     write_config_file()
     show_config(args)
 
+def add_table(args):
+    log("Coming soon")
+
+def remove_table(args):
+    log("Coming soon")
+
 def main():
     # Define a dictionary to map user input to functions
     function_map = {
@@ -561,6 +577,8 @@ def main():
         "get_xcluster_safe_time" : get_xcluster_safe_time,
         "planned_failover" : planned_failover,
         "unplanned_failover" : unplanned_failover,
+        "add_table" : add_table,
+        "remove_table" : remove_table,
         "wait_for_replication_drain" : wait_for_replication_drain,
         "bootstrap_databases" : bootstrap_databases,
         "clear_bootstrap" : clear_bootstrap,

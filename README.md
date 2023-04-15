@@ -20,6 +20,7 @@ commands:
         validate_universes
         setup_replication
         setup_replication_with_bootstrap
+        get_replication_info
         set_standby_role
         set_active_role
         get_xcluster_safe_time

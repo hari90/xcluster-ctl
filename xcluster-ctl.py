@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import time
+import subprocess
 from utils import *
 
 config_file = "config.json"
@@ -704,6 +705,9 @@ def get_replication_info(args):
         log(f"{Color.RED}STANDBY role has not been set on {Color.RESET}{standby_config.universe_name}{Color.RED}. Please run 'set_standby_role'")
 
 def main():
+    # logs latest commit and time of commit
+    commit_history = run_subprocess(["git", "log", "-1"])
+    log(commit_history[0], "\t" , commit_history[2]) 
     # Define a dictionary to map user input to functions
     function_map = {
         "configure": configure,

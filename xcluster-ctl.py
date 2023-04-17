@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import time
+from urllib.parse import urlsplit, urlunsplit
 from utils import *
 
 config_file = "config.json"
@@ -61,7 +62,6 @@ class UniverseConfig:
 
         self.tserver_addresses = ",".join(map('{0}:7100'.format, self.tserver_ip_map))
 
-
 primary_config = UniverseConfig()
 standby_config = UniverseConfig()
 
@@ -109,7 +109,7 @@ def read_config_file():
 def is_configured():
     return primary_config.initialized and standby_config.initialized
 
-def print_header():
+def print_header()/opt/yugabyte/yugaware/data/keys/08c0ba0e-3558-40fc-94e5-a87a627de8c5/yb-15-aws-portal-1-key.pem:
     log(f"[ {Color.BLUE}{primary_config.universe_name}{Color.RESET} -> {Color.BLUE}{standby_config.universe_name}{Color.RESET} ]")
 
 def validate_ip_csv(ip_str : str):
@@ -221,17 +221,23 @@ def get_cluster_config_from_user(cluster_type : str):
     return ssh_port, pem_file
 
 def configure(args):
-    portal_config.url = input("Enter the portal url: ")
-    if portal_config.url.strip() == "":
+    full_url = input("Enter the portal url: ")
+    url_parts = urlsplit(full_url)
+    portal_config.url = urlunsplit((url_parts.scheme, url_parts.netloc, '', '', ''))
+    if len(portal_config.url) == 0:
         raise_exception("Portal url cannot be empty")
 
+    # log(http_get(f"{portal_config.url}/profile", False))
+    log(f"Get the Customer ID and API Token from {Color.YELLOW}{portal_config.url}/profile")
     portal_config.customer_id = input("Enter the customer id: ")
     if portal_config.customer_id.strip() == "":
         raise_exception("Customer id cannot be empty")
+    validate_guid(portal_config.customer_id)
 
     portal_config.token = input("Enter the auth token: ")
     if portal_config.token.strip() == "":
         raise_exception("Auth token cannot be empty")
+    validate_guid(portal_config.token)
 
     master_ips = input(f"\nEnter one Primary universe master IP: ")
     ipaddress.ip_address(master_ips)
@@ -295,7 +301,7 @@ def validate_flags(url : str, ca_cert_path : str, required_flags, universe_name 
             raise_exception(f"Required flag {Color.YELLOW}{flag}{Color.RESET} is not set on {Color.YELLOW}{universe_name} {url}")
 
 def validate_flags_on_universe(config: UniverseConfig):
-    log(f"Validating flags on {config.universe_name}")
+    log(f"Validating flags on {Color.YELLOW}{config.universe_name}")
     for url in config.master_web_server_map:
         validate_flags(url, config.ca_cert_path, required_master_flags, config.universe_name)
     for url in config.tserver_web_server_map:

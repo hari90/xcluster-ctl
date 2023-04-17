@@ -40,7 +40,7 @@ def raise_exception(message : str):
     log_to_file("Exception:", message)
     raise Exception(Color.RED+message+Color.RESET)
 
-def http_get(url : str, ca_cert_path : str):
+def http_get(url : str, ca_cert_path):
     # print(url, ca_cert_path)
     response = requests.get(url, verify=ca_cert_path)
     if response.status_code == 200:
@@ -94,3 +94,13 @@ def move_file(from_path : str, to_path : str):
 def is_input_yes(question : str):
     answer = input(f"{question}? (yes/no): ")
     return answer.lower() in ["yes","y"]
+
+def validate_guid(guid):
+    # Regular expression pattern for GUID/UUID
+    guid_pattern = re.compile(
+        r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    )
+
+    # Check if the input string matches the GUID pattern
+    if not guid_pattern.match(guid):
+        raise_exception(f"Invalid GUID: {guid}")

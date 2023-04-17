@@ -1,3 +1,4 @@
+import datetime
 import ipaddress
 import json
 import os
@@ -281,8 +282,10 @@ def validate_universes(args):
 
 def get_xcluster_safe_time_int():
     log(f"Getting xcluster_safe_time from {standby_config.universe_name}\n")
-    log(f"Current_time:\t\t{datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%s')}")
+    current_time = datetime.datetime.utcnow()
+    log(f"Current_time:\t\t{current_time.strftime('%Y-%m-%d %H:%M:%S.%f')}")
     xcluster_safe_time = run_yb_admin(standby_config, "get_xcluster_safe_time")
+    namespace_safe_time_map=[]
     namespace_id = ""
     uninitialized_safe_time : bool = len(xcluster_safe_time) == 0
     for line in xcluster_safe_time:
@@ -295,12 +298,21 @@ def get_xcluster_safe_time_int():
             log(f"\nnamespace_id:\t\t{namespace_id}\nxcluster_safe_time:\t{value}")
             if "2023-" not in value:
                 uninitialized_safe_time=True
-    return uninitialized_safe_time
+            # 2023-04-17 17:54:33.060186
+            datetime_obj = datetime.datetime.strptime(value, '%Y-%m-%d %H:%M:%S.%f')
+            namespace_safe_time_map += [(namespace_id, datetime_obj)]
+
+    if len(namespace_safe_time_map):
+        min_datetime_obj = min(namespace_safe_time_map, key=lambda x: x[1])[1]
+        lag = 0
+        if current_time > min_datetime_obj:
+            lag = current_time - min_datetime_obj
+        log(f"\nMax xcluster safe time lag: {lag}")
+    return uninitialized_safe_time, namespace_safe_time_map
 
 def get_xcluster_estimated_data_loss(args):
     log(f"Getting estimated data loss from {standby_config.universe_name}")
     xcluster_safe_time = run_yb_admin(standby_config, "get_xcluster_estimated_data_loss")
-    namespace_id = ""
     for line in xcluster_safe_time:
         value = line.split('":')
         if len(value) > 1:
@@ -313,9 +325,13 @@ def get_xcluster_estimated_data_loss(args):
     log("\n"+Color.GREEN+"Successfully got estimated data loss")
 
 def get_xcluster_safe_time(args):
-    while get_xcluster_safe_time_int():
+    while True:
+        uninitialized_safe_time, namespace_safe_time_map = get_xcluster_safe_time_int()
+        if not uninitialized_safe_time:
+            break
         log(Color.YELLOW+"Some xcluster_safe_time are not initialized. Waiting...\n")
         time.sleep(2)
+
     log("\n"+Color.GREEN+"Successfully got xcluster_safe_time")
 
 def is_standy_role(config: UniverseConfig):

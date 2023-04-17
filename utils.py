@@ -60,7 +60,7 @@ def run_subprocess(*command:object):
     returncode = sub_process.poll()
     if returncode != 0:
         error = sub_process.stderr.readlines()
-        raise_exception(f"{error}")
+        raise_exception(f"{error}. Return code: {returncode}")
     else:
         lines = []
         for line in result:

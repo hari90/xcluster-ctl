@@ -46,7 +46,7 @@ def http_get(url : str, ca_cert_path : str):
     if response.status_code == 200:
         return response.text
     else:
-        raise Exception("Failed to fetch data from {url}. Status code:", response.status_code)
+        raise_exception(f"Failed to fetch data from {url}. Status code:{response.status_code}")
 
 def run_subprocess(*command:object):
     # print(' '.join(*command))

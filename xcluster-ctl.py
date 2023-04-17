@@ -9,6 +9,16 @@ from utils import *
 config_file = "config.json"
 ca_file = "ca.crt"
 
+class PortalConfig:
+    url = ""
+    customer_id = ""
+    token = ""
+
+    def __str__(self):
+        return "{'url': '" + self.url + "', 'customer_id': '" + self.customer_id + "', 'token': '" + self.token + "'}"
+
+portal_config = PortalConfig()
+
 class UniverseConfig:
     initialized = False
     universe_uuid = ""
@@ -62,6 +72,7 @@ def run_yb_admin(config: UniverseConfig, command : str):
 def write_config_file():
     # Serialize objects to JSON
     config_dict = {
+        "portal_config": portal_config.__dict__,
         "primary_config": primary_config.__dict__,
         "standby_config": standby_config.__dict__
     }
@@ -91,6 +102,7 @@ def read_config_file():
         if "primary_config" not in config_dict or "standby_config" not in config_dict:
             return
 
+        portal_config.__dict__ = config_dict["portal_config"]
         primary_config.__dict__ = config_dict["primary_config"]
         standby_config.__dict__ = config_dict["standby_config"]
 
@@ -209,13 +221,25 @@ def get_cluster_config_from_user(cluster_type : str):
     return ssh_port, pem_file
 
 def configure(args):
-    master_ips = input(f"Enter one Primary universe master IP: ")
+    portal_config.url = input("Enter the portal url: ")
+    if portal_config.url.strip() == "":
+        raise_exception("Portal url cannot be empty")
+
+    portal_config.customer_id = input("Enter the customer id: ")
+    if portal_config.customer_id.strip() == "":
+        raise_exception("Customer id cannot be empty")
+
+    portal_config.token = input("Enter the auth token: ")
+    if portal_config.token.strip() == "":
+        raise_exception("Auth token cannot be empty")
+
+    master_ips = input(f"\nEnter one Primary universe master IP: ")
     ipaddress.ip_address(master_ips)
 
     ssh_port, pem_file = get_cluster_config_from_user("Primary")
     init_universe(primary_config, master_ips, ssh_port, pem_file)
 
-    master_ips = input("Enter one Secondary universe master IP: ")
+    master_ips = input("\nEnter one Secondary universe master IP: ")
     ipaddress.ip_address(master_ips)
 
     log(f"\nssh port:\t\t{ssh_port}\nssh cert file path:\t{pem_file}")
@@ -235,6 +259,8 @@ def configure(args):
     validate_universes([])
 
 def show_config(args):
+    log("Portal Config:")
+    log(Color.YELLOW+str(portal_config))
     log("Primary Universe:")
     log(Color.YELLOW+str(primary_config))
     log("Standby Universe:")
@@ -279,6 +305,25 @@ def validate_universes(args):
     validate_flags_on_universe(primary_config)
     validate_flags_on_universe(standby_config)
     log(Color.GREEN + "Universe validation successful")
+
+def sync_portal(args):
+    log(f"Synching Poral @{portal_config.url}")
+    # curl -k --location --request POST 'https://portal.dev.yugabyte.com/api/v1/customers/11d78d93-1381-4d1d-8393-ba76f47ba7a6/xcluster_configs/sync?targetUniverseUUID=76b9e2c2-8e29-45cf-a6fd-daa7dfe1b993' --header 'X-AUTH-YW-API-TOKEN: 244b3ac7-63bc-47c3-0' --data ''
+
+    request_url = f"{portal_config.url}/api/v1/customers/{portal_config.customer_id}/xcluster_configs/sync?targetUniverseUUID={standby_config.universe_uuid}"
+    headers = {
+    "X-AUTH-YW-API-TOKEN": portal_config.token
+    }
+    payload = ""
+    response = requests.request("POST", request_url, headers=headers, data=payload, verify=False)
+
+    if response.status_code == 200:
+        log(response.text)
+    else:
+        log_to_file(response.status_code, request_url, headers)
+        raise_exception(f"Failed to sync Portal. Status code:{response.status_code}")
+
+    log(Color.GREEN + "Successfully synced Portal")
 
 def get_xcluster_safe_time_int():
     log(f"Getting xcluster_safe_time from {standby_config.universe_name}\n")
@@ -477,6 +522,7 @@ def setup_replication_with_bootstrap(args):
 
     log(Color.GREEN+"Successfully setup replication")
     set_standby_role(args)
+    sync_portal(args)
 
 def setup_replication(args):
     if len(primary_config.bootstrap_ids) > 0:
@@ -498,6 +544,7 @@ def setup_replication(args):
 
     log(Color.GREEN+"Successfully setup replication")
     set_standby_role(args)
+    sync_portal(args)
 
 def delete_replication(args):
     replication_name, stream_count, role = get_replication_info_int()
@@ -505,6 +552,7 @@ def delete_replication(args):
     result = run_yb_admin(standby_config, f"delete_universe_replication {primary_config.universe_uuid}_{replication_name}")
     log('\n'.join(result))
     log(Color.GREEN+"Successfully deleted replication")
+    sync_portal(args)
 
 def pause_replication(args):
     replication_name, stream_count, role = get_replication_info_int()
@@ -512,6 +560,7 @@ def pause_replication(args):
     result = run_yb_admin(standby_config, f"set_universe_replication_enabled {primary_config.universe_uuid}_{replication_name} 0")
     log('\n'.join(result))
     log(Color.GREEN+"Successfully paused replication")
+    sync_portal(args)
 
 def resume_replication(args):
     replication_name, stream_count, role = get_replication_info_int()
@@ -519,6 +568,7 @@ def resume_replication(args):
     result = run_yb_admin(standby_config, f"set_universe_replication_enabled {primary_config.universe_uuid}_{replication_name} 1")
     log('\n'.join(result))
     log(Color.GREEN+"Successfully resumed replication")
+    sync_portal(args)
 
 def swap_universe_configs(args):
     log(f"Swapping Primay and Standby universes")
@@ -678,6 +728,7 @@ def main():
         "reload_roles" : reload_roles,
         "switch_universe_configs" : swap_universe_configs,
         "get_xcluster_estimated_data_loss" : get_xcluster_estimated_data_loss,
+        "sync_portal" : sync_portal,
     }
 
     usage_str=f"Usage: python3 {sys.argv[0]} <command> [args]\n"\

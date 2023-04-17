@@ -604,7 +604,7 @@ def extract_consumer_registry(data: str):
             role="STANDBY"
 
         if "producer_map" in line:
-            if universe_uuid is not "":
+            if universe_uuid != "":
                 raise_exception("Multiple replication groups found. Only one replication group is supported")
             line = lines[i]
             i = i + 1
@@ -621,7 +621,7 @@ def extract_consumer_registry(data: str):
         if "stream_map" in line:
             stream_count+=1
 
-    if replication_name is "" or stream_count == 0:
+    if replication_name == "" or stream_count == 0:
         raise_exception("No replication in progress")
 
     return replication_name, stream_count, role
@@ -635,7 +635,7 @@ def get_replication_info_int():
 def get_replication_info(args):
     replication_name, stream_count, role = get_replication_info_int()
     log(f"{Color.GREEN}Found replication group {Color.YELLOW}{replication_name}{Color.GREEN} with {Color.YELLOW}{stream_count}{Color.GREEN} tables")
-    if role is not "STANDBY":
+    if role != "STANDBY":
         log(f"{Color.RED}STANDBY role has not been set on {Color.RESET}{standby_config.universe_name}{Color.RED}. Please run 'set_standby_role'")
 
 def main():

@@ -283,7 +283,7 @@ def validate_universes(args):
 def get_xcluster_safe_time_int():
     log(f"Getting xcluster_safe_time from {standby_config.universe_name}\n")
     current_time = datetime.datetime.utcnow()
-    log(f"Current_time:\t\t{current_time.strftime('%Y-%m-%d %H:%M:%S.%f')}")
+    log(f"Current_time(UTC):\t\t{current_time.strftime('%Y-%m-%d %H:%M:%S.%f')}")
     xcluster_safe_time = run_yb_admin(standby_config, "get_xcluster_safe_time")
     namespace_safe_time_map=[]
     namespace_id = ""
@@ -507,14 +507,16 @@ def delete_replication(args):
     log(Color.GREEN+"Successfully deleted replication")
 
 def pause_replication(args):
+    replication_name, stream_count, role = get_replication_info_int()
     log(f"Pausing replication from {primary_config.universe_name} to {standby_config.universe_name}")
-    result = run_yb_admin(standby_config, f"set_universe_replication_enabled {primary_config.universe_uuid}_repl 0")
+    result = run_yb_admin(standby_config, f"set_universe_replication_enabled {primary_config.universe_uuid}_{replication_name} 0")
     log('\n'.join(result))
     log(Color.GREEN+"Successfully paused replication")
 
 def resume_replication(args):
+    replication_name, stream_count, role = get_replication_info_int()
     log(f"Resuming replication from {primary_config.universe_name} to {standby_config.universe_name}")
-    result = run_yb_admin(standby_config, f"set_universe_replication_enabled {primary_config.universe_uuid}_repl 1")
+    result = run_yb_admin(standby_config, f"set_universe_replication_enabled {primary_config.universe_uuid}_{replication_name} 1")
     log('\n'.join(result))
     log(Color.GREEN+"Successfully resumed replication")
 
@@ -563,6 +565,19 @@ def unplanned_failover(args):
     log(Color.YELLOW+f"\nOnce {standby_config.universe_name} comes back online drop its database and recreate the database schema. Then use YBA to setup replication with backup and restore. After it completes run set_standby_role\n")
 
     log(Color.GREEN+f"Successfully failed over from {standby_config.universe_name} to {primary_config.universe_name}")
+
+def reload_roles_int(args):
+    if is_standy_role(primary_config):
+        primary_config.role = "STANDBY"
+    else:
+        primary_config.role = "ACTIVE"
+
+    if is_standy_role(standby_config):
+        standby_config.role = "STANDBY"
+    else:
+        standby_config.role = "ACTIVE"
+
+    write_config_file()
 
 def reload_roles(args):
     if is_standy_role(primary_config):
@@ -647,6 +662,8 @@ def main():
         "setup_replication" : setup_replication,
         "setup_replication_with_bootstrap" : setup_replication_with_bootstrap,
         "get_replication_info" : get_replication_info,
+        "pause_replication" : pause_replication,
+        "resume_replication" : resume_replication,
         "set_standby_role" : set_standby_role,
         "set_active_role" : set_active_role,
         "get_xcluster_safe_time" : get_xcluster_safe_time,
@@ -661,8 +678,6 @@ def main():
         "reload_roles" : reload_roles,
         "switch_universe_configs" : swap_universe_configs,
         "get_xcluster_estimated_data_loss" : get_xcluster_estimated_data_loss,
-        "pause_replication" : pause_replication,
-        "resume_replication" : resume_replication,
     }
 
     usage_str=f"Usage: python3 {sys.argv[0]} <command> [args]\n"\

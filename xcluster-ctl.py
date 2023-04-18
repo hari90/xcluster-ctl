@@ -505,20 +505,21 @@ def wait_for_replication_drain(args):
         time.sleep(1)
     log(Color.GREEN+"Successfully completed wait for replication drain")
 
-def get_table_ids(databases):
+def get_primary_tables_map(databases):
     log(f"Getting tables for database(s) {wrap_color(Color.YELLOW, ','.join(databases))} from {wrap_color(Color.YELLOW, primary_config.universe_name)}")
-    table_ids = []
+    table_ids = {}
     result = run_yb_admin(primary_config, f"list_tables include_table_id include_table_type")
-    for table_and_db in result:
+    for table_info in result:
         match = False
         for database in databases:
             pattern = f"^{database}.*(?<!catalog)$"
-            re_match = re.match(pattern, table_and_db)
+            re_match = re.match(pattern, table_info)
             if re_match:
                 match = True
                 break
         if match:
-            table_ids += [table_and_db.split(' ')[1]]
+            table_info_list = table_info.split(' ')
+            table_ids[table_info_list[0]] = table_info_list[1]
 
     log_to_file(table_ids)
     return table_ids
@@ -550,7 +551,7 @@ def bootstrap_databases(args):
     databases = databases_str.split(',')
 
     create_snapshot_schedule_if_needed(primary_config, databases)
-    table_ids = get_table_ids(databases)
+    table_ids = get_primary_tables_map(databases).values()
 
     if len(table_ids) == 0:
         raise_exception("No tables found")
@@ -639,7 +640,7 @@ def setup_replication(args):
     create_snapshot_schedule_if_needed(primary_config, databases)
     create_snapshot_schedule_if_needed(standby_config, databases)
 
-    table_ids = get_table_ids(databases)
+    table_ids = get_primary_tables_map(databases).values()
 
     if len(table_ids) == 0:
         raise_exception("No tables found")
@@ -814,11 +815,67 @@ def reload_roles(args):
     write_config_file()
     show_config(args)
 
-def add_table(args):
-    log("Coming soon")
+def add_tables(args):
+    replication_info = get_replication_info_int()
+    if not replication_info.valid:
+        raise_exception("No replication in progress")
 
-def remove_table(args):
-    log("Coming soon")
+    log(f"Adding tables to replication group {replication_info.name}")
+
+    if len(args) != 2:
+        database = input("Please provide the database name: ")
+        table_str = input("Please provide a CSV list of table names: ")
+    else:
+        database  = args[0]
+        table_str = args[1]
+
+    table_map = get_primary_tables_map([database])
+
+    table_ids = []
+
+    tables = table_str.split(',')
+    for table in tables:
+        db_table = f"{database}.{table}"
+        if db_table not in table_map:
+            raise_exception(f"Table {table} not found in {database}")
+        table_ids += [table_map[db_table]]
+
+    log(run_yb_admin(standby_config, f"alter_universe_replication {primary_config.universe_uuid}_{replication_info.name} add_table {','.join(table_ids)}"))
+    sync_portal(args)
+
+    wait_for_xcluster_safe_time_to_catchup()
+    log(Color.GREEN+f"Successfully added {len(table_ids)} table(s) to replication")
+
+def remove_tables(args):
+    replication_info = get_replication_info_int()
+    if not replication_info.valid:
+        raise_exception("No replication in progress")
+
+    log(f"Removing tables from replication group {replication_info.name}")
+
+    if len(args) != 2:
+        database = input("Please provide the database name: ")
+        table_str = input("Please provide a CSV list of table names: ")
+    else:
+        database  = args[0]
+        table_str = args[1]
+
+    table_map = get_primary_tables_map([database])
+
+    table_ids = []
+
+    tables = table_str.split(',')
+    for table in tables:
+        db_table = f"{database}.{table}"
+        if db_table not in table_map:
+            raise_exception(f"Table {table} not found in {database}")
+        table_ids += [table_map[db_table]]
+
+    log(run_yb_admin(standby_config, f"alter_universe_replication {primary_config.universe_uuid}_{replication_info.name} remove_table {','.join(table_ids)}"))
+    sync_portal(args)
+
+    wait_for_xcluster_safe_time_to_catchup()
+    log(Color.GREEN+f"Successfully removed {len(table_ids)} table(s) from replication")
 
 def extract_consumer_registry(data: str):
     lines = data.splitlines()
@@ -990,8 +1047,8 @@ def main():
         "get_xcluster_safe_time" : get_xcluster_safe_time,
         "planned_failover" : planned_failover,
         "unplanned_failover" : unplanned_failover,
-        "add_table" : add_table,
-        "remove_table" : remove_table,
+        "add_tables" : add_tables,
+        "remove_tables" : remove_tables,
         "wait_for_replication_drain" : wait_for_replication_drain,
         "bootstrap_databases" : bootstrap_databases,
         "clear_bootstrap" : clear_bootstrap,

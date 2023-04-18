@@ -57,13 +57,25 @@ def run_subprocess(*command:object):
                        stdout=subprocess.PIPE,
                        stderr=subprocess.PIPE)
 
-    result = sub_process.stdout.readlines()
-    returncode = sub_process.poll()
+    waited = False
+    while True:
+        try:
+            returncode = sub_process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            returncode = None
+        if returncode is not None:
+            break
+        waited = True
+        print(".", end="", flush=True)
+    if waited:
+        print()
+
     if returncode != 0:
         error = sub_process.stderr.readlines()
         raise_exception(f"{error}. Return code: {returncode}")
     else:
         lines = []
+        result = sub_process.stdout.readlines()
         for line in result:
             lines+=[str(line.decode("utf-8")).strip()]
         log_to_file("Result:", lines)

@@ -214,11 +214,11 @@ def init_universe(config: UniverseConfig, master_ip : str, ssh_port : int, key_f
     config.InitTserverInfo()
     config.initialized=True
 
-def copy_certs(from_config : UniverseConfig, to_config : UniverseConfig):
+def copy_certs(from_config : UniverseConfig, to_config : UniverseConfig, replication_name: str):
     log(f"Copying cert files to {to_config.universe_name}")
     nodes = set(to_config.master_ip_map).union(set(to_config.tserver_ip_map))
     for node in nodes:
-        copy_file_to_remote(node, to_config.ssh_port, to_config.pem_file_path, from_config.ca_cert_path, f"yugabyte-tls-producer/{from_config.universe_uuid}_repl/{ca_file}")
+        copy_file_to_remote(node, to_config.ssh_port, to_config.pem_file_path, from_config.ca_cert_path, f"yugabyte-tls-producer/{from_config.universe_uuid}_{replication_name}/{ca_file}")
 
 def get_cluster_config_from_user(cluster_type : str):
     ssh_port_str = input(f"Enter {cluster_type} universe ssh port (default is 54422): ")
@@ -271,8 +271,9 @@ def configure(args):
     if primary_config.universe_uuid == standby_config.universe_uuid:
         raise_exception("Both universes are the same")
 
-    copy_certs(primary_config, standby_config)
-    copy_certs(standby_config, primary_config)
+    copy_certs(primary_config, standby_config, "repl")
+    copy_certs(standby_config, primary_config, "repl")
+    sync_portal()
 
     reload_roles(args)
 
@@ -503,7 +504,7 @@ def delete_cdc_streams(stream_id):
     log_to_file(result)
 
 def bootstrap_tables(table_ids):
-    log(f"Bootstrapping {len(table_ids)} tables...")
+    log(f"Checkpointing {len(table_ids)} tables")
 
     result = run_yb_admin(primary_config, "bootstrap_cdc_producer "+','.join(table_ids))
     bootstrap_ids = []
@@ -518,8 +519,6 @@ def bootstrap_databases(args):
         raise_exception("There is already an available bootstrap. Run setup_replication_with_bootstrap command")
 
     if len(args) != 1:
-        print(len(args))
-        print(args)
         databases_str = input("Please provide a CSV list of database names to bootstrap: ")
     else:
         databases_str = args[0]
@@ -571,13 +570,20 @@ def ensure_no_replication_in_progress():
 
 def setup_replication_with_bootstrap(args):
     ensure_no_replication_in_progress()
-
-    if not bootstrap_info.initialized:
-        bootstrap_databases(args)
-
     log(f"Setting up replication from {primary_config.universe_name} to {standby_config.universe_name} with bootstrap")
 
-    result = run_yb_admin(standby_config, f"setup_universe_replication {primary_config.universe_uuid}_repl {primary_config.master_addresses} {','.join(bootstrap_info.table_ids)} {','.join(bootstrap_info.bootstrap_ids)}")
+    if len(args) != 2:
+        replication_name = input("Please provide a replication name: ")
+        databases_str = input("Please provide a CSV list of database names: ")
+    else:
+        replication_name = args[0]
+        databases_str = args[1]
+
+    if not bootstrap_info.initialized:
+        bootstrap_databases([databases_str])
+
+    copy_certs(primary_config, standby_config, replication_name)
+    result = run_yb_admin(standby_config, f"setup_universe_replication {primary_config.universe_uuid}_{replication_name} {primary_config.master_addresses} {','.join(bootstrap_info.table_ids)} {','.join(bootstrap_info.bootstrap_ids)}")
     log('\n'.join(result))
 
     create_snapshot_schedule_if_needed(standby_config, bootstrap_info.databses)
@@ -595,10 +601,12 @@ def setup_replication(args):
 
     log(f"Setting up replication from {primary_config.universe_name} to {standby_config.universe_name} without bootstrap")
 
-    if len(args) != 1:
-        databases_str = input("Please provide a CSV list of database names to bootstrap: ")
+    if len(args) != 2:
+        replication_name = input("Please provide a replication name: ")
+        databases_str = input("Please provide a CSV list of database names: ")
     else:
-        databases_str = args[0]
+        replication_name = args[0]
+        databases_str = args[1]
 
     databases = databases_str.split(',')
     create_snapshot_schedule_if_needed(primary_config, databases)
@@ -609,7 +617,8 @@ def setup_replication(args):
     if len(table_ids) == 0:
         raise_exception("No tables found")
 
-    result = run_yb_admin(standby_config, f"setup_universe_replication {primary_config.universe_uuid}_repl {primary_config.master_addresses} {','.join(table_ids)}")
+    copy_certs(primary_config, standby_config, replication_name)
+    result = run_yb_admin(standby_config, f"setup_universe_replication {primary_config.universe_uuid}_{replication_name} {primary_config.master_addresses} {','.join(table_ids)}")
     log('\n'.join(result))
 
     set_standby_role(args)
@@ -688,6 +697,8 @@ def planned_failover(args):
     if replication_name == "" or stream_count == 0:
         raise_exception("No replication in progress")
 
+    log(f"Found replication group {wrap_color(Color.YELLOW,replication_name)} with {wrap_color(Color.YELLOW,stream_count)} tables")
+
     # In 2.18 this can be replaces with setting primary to STANBY role
     if not is_input_yes("Has the workload been stopped"):
         log(Color.YELLOW+"Planned failover abandoned")
@@ -699,7 +710,7 @@ def planned_failover(args):
     set_active_role(args)
     delete_replication(args)
     swap_universe_configs(args)
-    setup_replication_with_bootstrap([','.join(database_safe_time_map.keys())])
+    setup_replication_with_bootstrap([replication_name, ','.join(database_safe_time_map.keys())])
 
     log(Color.GREEN+f"Successfully failed over from {Color.YELLOW}{standby_config.universe_name}{Color.GREEN} to {Color.YELLOW}{primary_config.universe_name}")
 

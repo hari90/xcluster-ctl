@@ -536,7 +536,6 @@ def bootstrap_tables(table_ids):
     for line in result:
         bootstrap_ids.append(line.split(':')[-1].strip())
 
-    log_to_file(bootstrap_ids)
     return bootstrap_ids
 
 def bootstrap_databases(args):
@@ -559,7 +558,7 @@ def bootstrap_databases(args):
     bootstrap_ids = bootstrap_tables(table_ids)
 
     bootstrap_info.databses = databases
-    bootstrap_info.table_ids = table_ids
+    bootstrap_info.table_ids = list(table_ids)
     bootstrap_info.bootstrap_ids = bootstrap_ids
     bootstrap_info.initialized = True
     write_config_file()
@@ -735,7 +734,7 @@ def planned_failover(args):
     log(f"Found replication group {wrap_color(Color.YELLOW,replication_info.name)} with {wrap_color(Color.YELLOW,replication_info.table_count)} tables")
 
     # In 2.18 this can be replaces with setting primary to STANBY role
-    if not is_input_yes("Has the workload stopped"):
+    if not is_input_yes("\n\nHas the workload stopped"):
         log(Color.YELLOW+"Planned failover abandoned")
         return
 

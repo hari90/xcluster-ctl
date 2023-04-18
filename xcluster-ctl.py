@@ -76,6 +76,13 @@ class UniverseConfig:
 primary_config = UniverseConfig()
 standby_config = UniverseConfig()
 
+class ReplicationInfo:
+    valid = False
+    name = ""
+    table_count = 0
+    role = "ACTIVE"
+    paused = False
+
 def run_yb_admin(config: UniverseConfig, command : str):
     yb_admin_command = f"tserver/bin/yb-admin -master_addresses {config.master_addresses} --certs_dir_name yugabyte-tls-config/ {command}"
     return run_remotely(config.master_ip_map[0], config.ssh_port, config.pem_file_path, yb_admin_command)
@@ -368,7 +375,6 @@ def get_xcluster_safe_time_int():
                 raise_exception(f"Cannot find database {value} in {standby_config.universe_name}")
             database_name=database_map[value]
         if 'safe_time"' in line:
-            log(f"\ndatabase_name:\t\t{database_name}\nxcluster_safe_time:\t{value}")
             if "2023-" not in value:
                 uninitialized_safe_time=True
             # 2023-04-17 17:54:33.060186
@@ -376,6 +382,10 @@ def get_xcluster_safe_time_int():
             database_safe_time_map[database_name] = datetime_obj
 
     return uninitialized_safe_time, database_safe_time_map
+
+def print_xcluster_safe_time(database_safe_time_map):
+    for database_name in database_safe_time_map:
+            log(f"\ndatabase_name:\t\t{database_name}\nxcluster_safe_time:\t{database_safe_time_map[database_name]}")
 
 def get_xcluster_estimated_data_loss(args):
     log(f"Getting estimated data loss from {standby_config.universe_name}")
@@ -395,10 +405,19 @@ def get_xcluster_estimated_data_loss(args):
     log("\n"+Color.GREEN+"Successfully got estimated data loss")
 
 def get_xcluster_safe_time(args):
+    replication_info = get_replication_info_int()
+    if not replication_info.valid:
+        log(Color.RED+"No replication in progress")
+        return
+
+    log(f"{Color.GREEN}Found replication group {Color.YELLOW}{replication_info.name}{Color.GREEN} with {Color.YELLOW}{replication_info.table_count}{Color.GREEN} tables")
+
     while True:
         current_time = datetime.datetime.utcnow()
-        log(f"Current time(UTC):\t\t{current_time.strftime('%Y-%m-%d %H:%M:%S.%f')}")
         uninitialized_safe_time, database_safe_time_map = get_xcluster_safe_time_int()
+        log(f"Current time(UTC):\t{current_time.strftime('%Y-%m-%d %H:%M:%S.%f')}")
+        print_xcluster_safe_time(database_safe_time_map)
+
         if not uninitialized_safe_time:
             break
         log(Color.YELLOW+"Some xcluster_safe_time are not initialized. Waiting...\n")
@@ -412,8 +431,6 @@ def get_xcluster_safe_time(args):
         log(f"\nMax xcluster safe time lag: {lag}")
 
     log("\n"+Color.GREEN+"Successfully got xcluster_safe_time")
-
-    return database_safe_time_map
 
 def is_standy_role(config: UniverseConfig):
     result = http_get(f"{config.master_web_server_map[0]}xcluster-config", config.ca_cert_path)
@@ -433,7 +450,7 @@ def set_standby_role(args):
     time.sleep(2)
     log(Color.GREEN+"Successfully set role to STANDBY")
 
-    database_safe_time_map = get_xcluster_safe_time(args)
+    database_safe_time_map = wait_for_xcluster_safe_time_to_catchup()
     create_snapshot_schedule_if_needed(standby_config, database_safe_time_map.keys())
 
 def set_active_role(args):
@@ -557,17 +574,20 @@ def clear_bootstrap(args):
         return
 
     log(f"Deleting {len(bootstrap_info.bootstrap_ids)} streams")
+    i=1
     for bootstrap in bootstrap_info.bootstrap_ids:
+        print(f"{i}/{len(bootstrap_info.bootstrap_ids)}", end='\r')
         delete_cdc_streams(bootstrap)
+        i=i+1
 
     clear_bootstrap_from_config()
 
     log(Color.GREEN+"Successfully cleared bootstrap")
 
 def ensure_no_replication_in_progress():
-    replication_name, stream_count, role = get_replication_info_int()
-    if replication_name != "":
-        raise_exception(f"Replication {Color.YELLOW}{replication_name}{Color.RED} already in progress."\
+    replication_info = get_replication_info_int()
+    if replication_info.valid:
+        raise_exception(f"Replication {Color.YELLOW}{replication_info.name}{Color.RED} already in progress."\
                         " To add more tables to an existing replication, run add_table command")
 
 def setup_replication_with_bootstrap(args):
@@ -630,28 +650,33 @@ def setup_replication(args):
 
 
 def delete_replication(args):
-    replication_name, stream_count, role = get_replication_info_int()
-    if replication_name == "" or stream_count == 0:
+    replication_info = get_replication_info_int()
+    if not replication_info.valid:
         raise_exception("No replication in progress")
 
-    log(f"Deleting replication {wrap_color(Color.YELLOW,replication_name)} from {wrap_color(Color.YELLOW,primary_config.universe_name)} to {wrap_color(Color.YELLOW,standby_config.universe_name)}")
-    result = run_yb_admin(standby_config, f"delete_universe_replication {primary_config.universe_uuid}_{replication_name}")
+    log(f"Deleting replication {wrap_color(Color.YELLOW,replication_info.name)} from {wrap_color(Color.YELLOW,primary_config.universe_name)} to {wrap_color(Color.YELLOW,standby_config.universe_name)}")
+    result = run_yb_admin(standby_config, f"delete_universe_replication {primary_config.universe_uuid}_{replication_info.name}")
     log('\n'.join(result))
     sync_portal(args)
     log(Color.GREEN+"Successfully deleted replication")
 
 def pause_replication(args):
-    replication_name, stream_count, role = get_replication_info_int()
-    log(f"Pausing replication from {primary_config.universe_name} to {standby_config.universe_name}")
-    result = run_yb_admin(standby_config, f"set_universe_replication_enabled {primary_config.universe_uuid}_{replication_name} 0")
+    replication_info = get_replication_info_int()
+    if not replication_info.valid:
+        raise_exception("No replication in progress")
+
+    log(f"Pausing replication {replication_info.name} from {primary_config.universe_name} to {standby_config.universe_name}")
+    result = run_yb_admin(standby_config, f"set_universe_replication_enabled {primary_config.universe_uuid}_{replication_info.name} 0")
     log('\n'.join(result))
     log(Color.GREEN+"Successfully paused replication")
     sync_portal(args)
 
 def resume_replication(args):
-    replication_name, stream_count, role = get_replication_info_int()
-    log(f"Resuming replication from {primary_config.universe_name} to {standby_config.universe_name}")
-    result = run_yb_admin(standby_config, f"set_universe_replication_enabled {primary_config.universe_uuid}_{replication_name} 1")
+    replication_info = get_replication_info_int()
+    if not replication_info.valid:
+        raise_exception("No replication in progress")
+    log(f"Resuming replication {replication_info.name} from {primary_config.universe_name} to {standby_config.universe_name}")
+    result = run_yb_admin(standby_config, f"set_universe_replication_enabled {primary_config.universe_uuid}_{replication_info.name} 1")
     log('\n'.join(result))
     log(Color.GREEN+"Successfully resumed replication")
     sync_portal(args)
@@ -671,6 +696,7 @@ def wait_for_xcluster_safe_time_to_catchup():
     while True:
         time.sleep(1)
         uninitialized_safe_time, database_safe_time_map = get_xcluster_safe_time_int()
+        print_xcluster_safe_time(database_safe_time_map)
         if len(database_safe_time_map) == 0:
             raise_exception("No xcluster_safe_time found")
         if not uninitialized_safe_time:
@@ -695,14 +721,14 @@ def get_databases(config: UniverseConfig):
 
 def planned_failover(args):
     log(f"Performing a planned failover from {primary_config.universe_name} to {standby_config.universe_name}")
-    replication_name, stream_count, role = get_replication_info_int()
-    if replication_name == "" or stream_count == 0:
+    replication_info = get_replication_info_int()
+    if not replication_info.valid:
         raise_exception("No replication in progress")
 
-    log(f"Found replication group {wrap_color(Color.YELLOW,replication_name)} with {wrap_color(Color.YELLOW,stream_count)} tables")
+    log(f"Found replication group {wrap_color(Color.YELLOW,replication_info.name)} with {wrap_color(Color.YELLOW,replication_info.table_count)} tables")
 
     # In 2.18 this can be replaces with setting primary to STANBY role
-    if not is_input_yes("Has the workload been stopped"):
+    if not is_input_yes("Has the workload stopped"):
         log(Color.YELLOW+"Planned failover abandoned")
         return
 
@@ -712,17 +738,17 @@ def planned_failover(args):
     set_active_role(args)
     delete_replication(args)
     swap_universe_configs(args)
-    setup_replication_with_bootstrap([replication_name, ','.join(database_safe_time_map.keys())])
+    setup_replication_with_bootstrap([replication_info.name, ','.join(database_safe_time_map.keys())])
 
     log(Color.GREEN+f"Successfully failed over from {Color.YELLOW}{standby_config.universe_name}{Color.GREEN} to {Color.YELLOW}{primary_config.universe_name}")
 
 def unplanned_failover(args):
     log(f"Performing a unplanned failover from {primary_config.universe_name} to {standby_config.universe_name}")
-    replication_name, stream_count, role = get_replication_info_int()
-    if replication_name == "" or stream_count == 0:
+    replication_info = get_replication_info_int()
+    if not replication_info.valid:
         raise_exception("No replication in progress")
 
-    log(f"Found replication group {wrap_color(Color.YELLOW,replication_name)} with {wrap_color(Color.YELLOW,stream_count)} tables")
+    log(f"Found replication group {wrap_color(Color.YELLOW,replication_info.name)} with {wrap_color(Color.YELLOW,replication_info.table_count)} tables")
 
     pause_replication(args)
     # Wait for async processing
@@ -730,8 +756,9 @@ def unplanned_failover(args):
 
     get_xcluster_estimated_data_loss(args)
     current_time = datetime.datetime.utcnow()
-    log(f"Current time(UTC):\t\t{current_time.strftime('%Y-%m-%d %H:%M:%S.%f')}")
     uninitialized_safe_time, database_safe_time_map = get_xcluster_safe_time_int()
+    log(f"Current time(UTC):\t{current_time.strftime('%Y-%m-%d %H:%M:%S.%f')}")
+    print_xcluster_safe_time(database_safe_time_map)
     if uninitialized_safe_time:
         raise_exception("UnInitialized xcluster safe time found. Cannot proceed with failover.")
 
@@ -789,22 +816,23 @@ def remove_table(args):
 
 def extract_consumer_registry(data: str):
     lines = data.splitlines()
-    role = "ACTIVE"
     universe_uuid = ""
-    replication_name = ""
+    replication_info = ReplicationInfo()
     in_consumer_registry = False
-    stream_count = 0
     i = 0
     while i < len(lines):
         line = lines[i]
         i = i + 1
+        if "disable_stream: true" in line:
+            replication_info.paused = True
+            continue
         if "consumer_registry" in line:
             in_consumer_registry = True
         if not in_consumer_registry:
             continue
 
         if "role: STANDBY" in line:
-            role="STANDBY"
+            replication_info.role="STANDBY"
 
         if "producer_map" in line:
             if universe_uuid != "":
@@ -815,16 +843,18 @@ def extract_consumer_registry(data: str):
             match = re.search(replication_key_pattern, line)
             if match:
                 universe_uuid = match.group(1)
-                replication_name = match.group(2)
+                replication_info.name = match.group(2)
             else:
                 raise_exception(f"Cannot parse replication key {line}")
             if universe_uuid != primary_config.universe_uuid:
                 raise_exception(f"Expected replication from {primary_config.universe_name} {primary_config.universe_uuid}, but found {universe_uuid}. Rerun 'configure' with the correct Primary and Standby universes")
 
         if "stream_map" in line:
-            stream_count+=1
+            replication_info.table_count+=1
 
-    return replication_name, stream_count, role
+    replication_info.valid = replication_info.name != "" and replication_info.table_count > 0
+
+    return replication_info
 
 def get_replication_info_int():
     result = http_get(f"{standby_config.master_web_server_map[0]}xcluster-config", standby_config.ca_cert_path)
@@ -832,14 +862,18 @@ def get_replication_info_int():
 
 def get_replication_info(args):
     log("Getting current replication info")
-    replication_name, stream_count, role = get_replication_info_int()
+    replication_info = get_replication_info_int()
 
-    if replication_name == "" or stream_count == 0:
+    if not replication_info.valid:
         log(Color.YELLOW+"No replication in progress")
         return
 
-    log(f"{Color.GREEN}Found replication group {Color.YELLOW}{replication_name}{Color.GREEN} with {Color.YELLOW}{stream_count}{Color.GREEN} tables")
-    if role != "STANDBY":
+    log(f"{Color.GREEN}Found replication group {Color.YELLOW}{replication_info.name}{Color.GREEN} with {Color.YELLOW}{replication_info.table_count}{Color.GREEN} tables")
+
+    if replication_info.paused:
+        log(Color.YELLOW+"Replication is paused")
+
+    if replication_info.role != "STANDBY":
         log(f"{Color.RED}STANDBY role has not been set on {Color.RESET}{standby_config.universe_name}{Color.RED}. Please run set_standby_role command")
 
 def get_snapshot_info(config: UniverseConfig):

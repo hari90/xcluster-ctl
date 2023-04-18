@@ -50,12 +50,11 @@ def http_get(url : str, ca_cert_path):
     else:
         raise_exception(f"Failed to fetch data from {url}. Status code:{response.status_code}")
 
-def run_subprocess(*command:object):
-    log_to_file("Running subprocess:", ' '.join(*command))
+def run_subprocess_no_log(*command:object):
     sub_process = subprocess.Popen(*command,
-                       shell=False,
-                       stdout=subprocess.PIPE,
-                       stderr=subprocess.PIPE)
+                    shell=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE)
 
     waited = False
     while True:
@@ -73,13 +72,18 @@ def run_subprocess(*command:object):
     if returncode != 0:
         error = sub_process.stderr.readlines()
         raise_exception(f"{error}. Return code: {returncode}")
-    else:
-        lines = []
-        result = sub_process.stdout.readlines()
-        for line in result:
-            lines+=[str(line.decode("utf-8")).strip()]
-        log_to_file("Result:", lines)
-        return lines
+    
+    lines = []
+    result = sub_process.stdout.readlines()
+    for line in result:
+        lines+=[str(line.decode("utf-8")).strip()]
+    return lines
+
+def run_subprocess(*command:object):
+    log_to_file("Running subprocess:", ' '.join(*command))
+    lines=run_subprocess_no_log(*command)
+    log_to_file("Result:", lines)
+    return lines
 
 def run_remotely(hostname : str, ssh_port: int, key_file : str, command : str):
     ssh_command_str = f"sudo ssh -i {key_file} -ostricthostkeychecking=no -p {ssh_port} yugabyte@{hostname}"

@@ -299,6 +299,8 @@ required_common_flags = {
     "rpc_throttle_threshold_bytes=524288",
     "ysql_num_shards_per_tserver=3",
     "cdc_consumer_handler_thread_pool_size=200",
+    "certs_for_cdc_dir=/home/yugabyte/yugabyte-tls-producer",
+    "use_node_to_node_encryption=true",
     # Optional flags
     # db_block_cache_size_percentage=20,
     # yb_client_admin_operation_timeout_sec=600,
@@ -716,6 +718,12 @@ def planned_failover(args):
 
 def unplanned_failover(args):
     log(f"Performing a unplanned failover from {primary_config.universe_name} to {standby_config.universe_name}")
+    replication_name, stream_count, role = get_replication_info_int()
+    if replication_name == "" or stream_count == 0:
+        raise_exception("No replication in progress")
+
+    log(f"Found replication group {wrap_color(Color.YELLOW,replication_name)} with {wrap_color(Color.YELLOW,stream_count)} tables")
+
     pause_replication(args)
     # Wait for async processing
     time.sleep(1)

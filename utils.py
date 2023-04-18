@@ -41,21 +41,22 @@ def raise_exception(message : str):
     raise Exception(Color.RED+message+Color.RESET)
 
 def http_get(url : str, ca_cert_path):
+    log_to_file("Running http_get:", url)
     # print(url, ca_cert_path)
     response = requests.get(url, verify=ca_cert_path)
     if response.status_code == 200:
+        log_to_file("Response:", response.text)
         return response.text
     else:
         raise_exception(f"Failed to fetch data from {url}. Status code:{response.status_code}")
 
 def run_subprocess(*command:object):
-    # print(' '.join(*command))
+    log_to_file("Running subprocess:", ' '.join(*command))
     sub_process = subprocess.Popen(*command,
                        shell=False,
                        stdout=subprocess.PIPE,
                        stderr=subprocess.PIPE)
 
-    # streamdata = sub_process.communicate()[0]
     result = sub_process.stdout.readlines()
     returncode = sub_process.poll()
     if returncode != 0:
@@ -65,6 +66,7 @@ def run_subprocess(*command:object):
         lines = []
         for line in result:
             lines+=[str(line.decode("utf-8")).strip()]
+        log_to_file("Result:", lines)
         return lines
 
 def run_remotely(hostname : str, ssh_port: int, key_file : str, command : str):

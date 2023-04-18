@@ -350,36 +350,42 @@ def sync_portal(args):
     log(Color.GREEN + "Successfully synced Portal")
 
 def get_xcluster_safe_time_int():
-    log(f"Getting xcluster_safe_time from {standby_config.universe_name}\n")
+    log(f"Getting xcluster_safe_time from {standby_config.universe_name}")
+    database_map = get_databases(standby_config)
     xcluster_safe_time = run_yb_admin(standby_config, "get_xcluster_safe_time")
-    namespace_safe_time_map=[]
-    namespace_id = ""
+    database_safe_time_map={}
+    database_name = ""
     uninitialized_safe_time : bool = len(xcluster_safe_time) == 0
     for line in xcluster_safe_time:
         value = line.split('":')
         if len(value) > 1:
             value = value[1].strip().replace('"','').replace(',','')
         if 'namespace_id"' in line:
-            namespace_id=value
+            if value not in database_map:
+                raise_exception(f"Cannot find database {value} in {standby_config.universe_name}")
+            database_name=database_map[value]
         if 'safe_time"' in line:
-            log(f"\nnamespace_id:\t\t{namespace_id}\nxcluster_safe_time:\t{value}")
+            log(f"\ndatabase_name:\t\t{database_name}\nxcluster_safe_time:\t{value}")
             if "2023-" not in value:
                 uninitialized_safe_time=True
             # 2023-04-17 17:54:33.060186
             datetime_obj = datetime.datetime.strptime(value, '%Y-%m-%d %H:%M:%S.%f')
-            namespace_safe_time_map += [(namespace_id, datetime_obj)]
+            database_safe_time_map[database_name] = datetime_obj
 
-    return uninitialized_safe_time, namespace_safe_time_map
+    return uninitialized_safe_time, database_safe_time_map
 
 def get_xcluster_estimated_data_loss(args):
     log(f"Getting estimated data loss from {standby_config.universe_name}")
+    database_map = get_databases(standby_config)
     xcluster_safe_time = run_yb_admin(standby_config, "get_xcluster_estimated_data_loss")
     for line in xcluster_safe_time:
         value = line.split('":')
         if len(value) > 1:
             value = value[1].strip().replace('"','').replace(',','')
         if 'namespace_id"' in line:
-            log(f"\nnamespace_id:\t\t{value}")
+            if value not in database_map:
+                raise_exception(f"Cannot find database {value} in {standby_config.universe_name}")
+            log(f"\nnamespace_id:\t\t{database_map[value]}")
         if 'data_loss_sec"' in line:
             log(f"data_loss_sec:\t\t{value}")
 
@@ -388,15 +394,15 @@ def get_xcluster_estimated_data_loss(args):
 def get_xcluster_safe_time(args):
     while True:
         current_time = datetime.datetime.utcnow()
-        log(f"Current_time(UTC):\t\t{current_time.strftime('%Y-%m-%d %H:%M:%S.%f')}")
-        uninitialized_safe_time, namespace_safe_time_map = get_xcluster_safe_time_int()
+        log(f"Current time(UTC):\t\t{current_time.strftime('%Y-%m-%d %H:%M:%S.%f')}")
+        uninitialized_safe_time, database_safe_time_map = get_xcluster_safe_time_int()
         if not uninitialized_safe_time:
             break
         log(Color.YELLOW+"Some xcluster_safe_time are not initialized. Waiting...\n")
         time.sleep(2)
 
-    if len(namespace_safe_time_map):
-        min_datetime_obj = min(namespace_safe_time_map, key=lambda x: x[1])[1]
+    if len(database_safe_time_map):
+        min_datetime_obj = min(database_safe_time_map.values())
         lag = 0
         if current_time > min_datetime_obj:
             lag = current_time - min_datetime_obj
@@ -404,29 +410,41 @@ def get_xcluster_safe_time(args):
 
     log("\n"+Color.GREEN+"Successfully got xcluster_safe_time")
 
+    return database_safe_time_map
+
 def is_standy_role(config: UniverseConfig):
     result = http_get(f"{config.master_web_server_map[0]}xcluster-config", config.ca_cert_path)
     return "role: STANDBY" in result
 
 def set_standby_role(args):
     log(f"Setting {standby_config.universe_name} to STANDBY")
-    if standby_config.role != "STANDBY":
-        run_yb_admin(standby_config, "change_xcluster_role STANDBY")
-        standby_config.role = "STANDBY"
-        write_config_file()
-        # Wait for async processing
-        time.sleep(2)
+    reload_universe_roles(standby_config)
+    if standby_config.role == "STANDBY":
+        log(Color.GREEN+"Already in STANDBY role")
+        return
+
+    run_yb_admin(standby_config, "change_xcluster_role STANDBY")
+    standby_config.role = "STANDBY"
+    write_config_file()
+    # Wait for async processing
+    time.sleep(2)
     log(Color.GREEN+"Successfully set role to STANDBY")
 
-    get_xcluster_safe_time([])
+    database_safe_time_map = get_xcluster_safe_time(args)
+    create_snapshot_schedule_if_needed(standby_config, database_safe_time_map.keys())
 
 def set_active_role(args):
     log(f"Setting {standby_config.universe_name} to ACTIVE")
+    reload_universe_roles(standby_config)
 
-    if standby_config.role != "ACTIVE":
-        run_yb_admin(standby_config, "change_xcluster_role ACTIVE")
-        standby_config.role = "ACTIVE"
-        write_config_file()
+    if standby_config.role == "ACTIVE":
+        log(Color.GREEN+"Already in ACTIVE role")
+        return
+
+    run_yb_admin(standby_config, "change_xcluster_role ACTIVE")
+    standby_config.role = "ACTIVE"
+    write_config_file()
+
     # Wait for async processing
     time.sleep(2)
     log(Color.GREEN+"Successfully set role to ACTIVE")
@@ -485,7 +503,7 @@ def delete_cdc_streams(stream_id):
     log_to_file(result)
 
 def bootstrap_tables(table_ids):
-    log(f"Bootstrapping {len(table_ids)} tables")
+    log(f"Bootstrapping {len(table_ids)} tables...")
 
     result = run_yb_admin(primary_config, "bootstrap_cdc_producer "+','.join(table_ids))
     bootstrap_ids = []
@@ -497,9 +515,11 @@ def bootstrap_tables(table_ids):
 
 def bootstrap_databases(args):
     if bootstrap_info.initialized:
-        raise_exception("There is already an available bootstrap. Run setup_replication_with_bootstrap")
+        raise_exception("There is already an available bootstrap. Run setup_replication_with_bootstrap command")
 
     if len(args) != 1:
+        print(len(args))
+        print(args)
         databases_str = input("Please provide a CSV list of database names to bootstrap: ")
     else:
         databases_str = args[0]
@@ -520,7 +540,7 @@ def bootstrap_databases(args):
     bootstrap_info.initialized = True
     write_config_file()
 
-    log(Color.GREEN+"Successfully bootstrapped databases. Run setup_replication_with_bootstrap to complete setup")
+    log(Color.GREEN+"Successfully bootstrapped databases. Run setup_replication_with_bootstrap command to complete setup")
 
 def clear_bootstrap_from_config():
     bootstrap_info.initialized = False
@@ -543,7 +563,15 @@ def clear_bootstrap(args):
 
     log(Color.GREEN+"Successfully cleared bootstrap")
 
+def ensure_no_replication_in_progress():
+    replication_name, stream_count, role = get_replication_info_int()
+    if replication_name != "":
+        raise_exception(f"Replication {Color.YELLOW}{replication_name}{Color.RED} already in progress."\
+                        " To add more tables to an existing replication, run add_table command")
+
 def setup_replication_with_bootstrap(args):
+    ensure_no_replication_in_progress()
+
     if not bootstrap_info.initialized:
         bootstrap_databases(args)
 
@@ -553,8 +581,8 @@ def setup_replication_with_bootstrap(args):
     log('\n'.join(result))
 
     create_snapshot_schedule_if_needed(standby_config, bootstrap_info.databses)
-    set_standby_role(args)
     clear_bootstrap_from_config()
+    set_standby_role(args)
 
     sync_portal(args)
 
@@ -562,7 +590,8 @@ def setup_replication_with_bootstrap(args):
 
 def setup_replication(args):
     if bootstrap_info.initialized:
-        raise_exception("There is already an available bootstrap. Run setup_replication_with_bootstrap")
+        raise_exception("There is already an available bootstrap. Run setup_replication_with_bootstrap command")
+    ensure_no_replication_in_progress()
 
     log(f"Setting up replication from {primary_config.universe_name} to {standby_config.universe_name} without bootstrap")
 
@@ -591,6 +620,9 @@ def setup_replication(args):
 
 def delete_replication(args):
     replication_name, stream_count, role = get_replication_info_int()
+    if replication_name == "" or stream_count == 0:
+        raise_exception("No replication in progress")
+
     log(f"Deleting replication {wrap_color(Color.YELLOW,replication_name)} from {wrap_color(Color.YELLOW,primary_config.universe_name)} to {wrap_color(Color.YELLOW,standby_config.universe_name)}")
     result = run_yb_admin(standby_config, f"delete_universe_replication {primary_config.universe_uuid}_{replication_name}")
     log('\n'.join(result))
@@ -623,61 +655,96 @@ def swap_universe_configs(args):
     write_config_file()
     print_header()
 
-def planned_failover(args):
-    log(f"Performing a planned failover from {primary_config.universe_name} to {standby_config.universe_name}")
-    wait_for_replication_drain(args)
+def wait_for_xcluster_safe_time_to_catchup():
     current_time = datetime.datetime.utcnow()
     while True:
         time.sleep(1)
-        uninitialized_safe_time, namespace_safe_time_map = get_xcluster_safe_time_int()
-        if len(namespace_safe_time_map) == 0:
+        uninitialized_safe_time, database_safe_time_map = get_xcluster_safe_time_int()
+        if len(database_safe_time_map) == 0:
             raise_exception("No xcluster_safe_time found")
         if not uninitialized_safe_time:
-            min_datetime_obj = min(namespace_safe_time_map, key=lambda x: x[1])[1]
+            min_datetime_obj = min(database_safe_time_map.values())
             if min_datetime_obj > current_time:
                 break
 
         log(Color.YELLOW+f"Waiting for xcluster_safe_time to catch up to {current_time.strftime('%Y-%m-%d %H:%M:%S.%f ...')}\n")
 
+    return database_safe_time_map
+
+def get_databases(config: UniverseConfig):
+    lines = run_yb_admin(config, "list_namespaces")
+    lines = '\n'.join(lines).split('\n')
+    database_map = {}
+    for line in lines:
+        pattern = f"(\w+) (\w+) (?:ysql|ycql) .* (?:true|false)$"
+        re_match = re.search(pattern, line)
+        if re_match:
+            database_map[re_match.group(2)] = re_match.group(1)
+    return database_map
+
+def planned_failover(args):
+    log(f"Performing a planned failover from {primary_config.universe_name} to {standby_config.universe_name}")
+    replication_name, stream_count, role = get_replication_info_int()
+    if replication_name == "" or stream_count == 0:
+        raise_exception("No replication in progress")
+
+    # In 2.18 this can be replaces with setting primary to STANBY role
+    if not is_input_yes("Has the workload been stopped"):
+        log(Color.YELLOW+"Planned failover abandoned")
+        return
+
+    wait_for_replication_drain(args)
+    database_safe_time_map = wait_for_xcluster_safe_time_to_catchup()
+
     set_active_role(args)
     delete_replication(args)
     swap_universe_configs(args)
-    setup_replication_with_bootstrap(args)
+    setup_replication_with_bootstrap([','.join(database_safe_time_map.keys())])
 
     log(Color.GREEN+f"Successfully failed over from {Color.YELLOW}{standby_config.universe_name}{Color.GREEN} to {Color.YELLOW}{primary_config.universe_name}")
 
 def unplanned_failover(args):
     log(f"Performing a unplanned failover from {primary_config.universe_name} to {standby_config.universe_name}")
     pause_replication(args)
+    # Wait for async processing
+    time.sleep(1)
+
     get_xcluster_estimated_data_loss(args)
-    get_xcluster_safe_time(args)
-    if not is_input_yes("Are you sure you want to proceed"):
+    current_time = datetime.datetime.utcnow()
+    log(f"Current time(UTC):\t\t{current_time.strftime('%Y-%m-%d %H:%M:%S.%f')}")
+    uninitialized_safe_time, database_safe_time_map = get_xcluster_safe_time_int()
+    if uninitialized_safe_time:
+        raise_exception("UnInitialized xcluster safe time found. Cannot proceed with failover.")
+
+    if not is_input_yes(f"Any data written to the {primary_config.universe_name} after these times will be lost. Are you sure you want to proceed"):
         log(Color.YELLOW+"Planned failover abandoned")
         return
 
-    log(Color.YELLOW+"\nUse YBA to restore the databases to the xcluster safe time\n")
-    if not is_input_yes("Did the point in time restore complete"):
-        log(Color.YELLOW+"Planned failover abandoned")
-        return
+    snapshot_info = get_snapshot_info(standby_config)
+
+    log("Restoring databases to xcluster safe time")
+    for database in database_safe_time_map.keys():
+        if database not in snapshot_info:
+            raise_exception(f"Snapshot not found for database {database}. Aborting failover")
+        restore_to_point_in_time(standby_config, database, snapshot_info[database], database_safe_time_map[database])
 
     set_active_role(args)
     delete_replication(args)
     swap_universe_configs(args)
 
-    log(Color.YELLOW+f"\nOnce {standby_config.universe_name} comes back online drop its database and recreate the database schema. Then use YBA to setup replication with backup and restore. After it completes run set_standby_role\n")
+    log(Color.YELLOW+f"\nOnce {standby_config.universe_name} comes back online drop its database and recreate the database schema. Then use YBA to setup replication with backup and restore. After it completes run set_standby_role command\n")
 
     log(Color.GREEN+f"Successfully failed over from {Color.YELLOW}{standby_config.universe_name}{Color.GREEN} to {Color.YELLOW}{primary_config.universe_name}")
 
-def reload_roles_int(args):
-    if is_standy_role(primary_config):
-        primary_config.role = "STANDBY"
+def reload_universe_roles(config: UniverseConfig):
+    if is_standy_role(config):
+        config.role = "STANDBY"
     else:
-        primary_config.role = "ACTIVE"
+        config.role = "ACTIVE"
 
-    if is_standy_role(standby_config):
-        standby_config.role = "STANDBY"
-    else:
-        standby_config.role = "ACTIVE"
+def reload_roles_int(args):
+    reload_universe_roles(primary_config)
+    reload_universe_roles(standby_config)
 
     write_config_file()
 
@@ -738,21 +805,23 @@ def extract_consumer_registry(data: str):
         if "stream_map" in line:
             stream_count+=1
 
-    if replication_name == "" or stream_count == 0:
-        raise_exception("No replication in progress")
-
     return replication_name, stream_count, role
 
 def get_replication_info_int():
-    log("Getting current replication info")
     result = http_get(f"{standby_config.master_web_server_map[0]}xcluster-config", standby_config.ca_cert_path)
     return extract_consumer_registry(result)
 
 def get_replication_info(args):
+    log("Getting current replication info")
     replication_name, stream_count, role = get_replication_info_int()
+
+    if replication_name == "" or stream_count == 0:
+        log(Color.YELLOW+"No replication in progress")
+        return
+
     log(f"{Color.GREEN}Found replication group {Color.YELLOW}{replication_name}{Color.GREEN} with {Color.YELLOW}{stream_count}{Color.GREEN} tables")
     if role != "STANDBY":
-        log(f"{Color.RED}STANDBY role has not been set on {Color.RESET}{standby_config.universe_name}{Color.RED}. Please run 'set_standby_role'")
+        log(f"{Color.RED}STANDBY role has not been set on {Color.RESET}{standby_config.universe_name}{Color.RED}. Please run set_standby_role command")
 
 def get_snapshot_info(config: UniverseConfig):
     result = run_yb_admin(config, "list_snapshot_schedules")
@@ -764,7 +833,7 @@ def get_snapshot_info(config: UniverseConfig):
         db_name = schedule["options"]["filter"].split('.')[-1]
         if db_name not in database_schedules:
             database_schedules[db_name] = []
-        database_schedules[db_name] += [schedule_id]
+        database_schedules[db_name] = schedule_id
 
     return database_schedules
 
@@ -793,10 +862,18 @@ def list_snapshot_schedules(args):
     list_snapshot_schedules_for_iniverse(standby_config)
     log(Color.GREEN+"Successfully listed snapshot schedules")
 
+def restore_to_point_in_time(config: UniverseConfig, database: str, snapshot_id: str, restore_ime: datetime):
+    restore_time_str = restore_ime.strftime('%Y-%m-%d %H:%M:%S.%f')
+    log(f"Restoring {wrap_color(Color.YELLOW, database)} to {wrap_color(Color.YELLOW, restore_time_str)}")
+    result = run_yb_admin(config, f'restore_snapshot_schedule {snapshot_id} "{restore_time_str}"')
+    log('\n'.join(result))
+    log(Color.GREEN+f"Successfully restored {database}")
+
 def main():
     # logs latest commit and time of commit
     commit_history = run_subprocess(["git", "log", "-1"])
-    log(commit_history[0], "\t" , commit_history[2])
+    log_to_file(commit_history[0], "\t" , commit_history[2])
+
     # Define a dictionary to map user input to functions
     function_map = {
         "configure": configure,

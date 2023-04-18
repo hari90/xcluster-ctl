@@ -45,7 +45,7 @@ def http_get(url : str, ca_cert_path):
     # print(url, ca_cert_path)
     response = requests.get(url, verify=ca_cert_path)
     if response.status_code == 200:
-        log_to_file("Response:", response.text)
+        # log_to_file("Response:", response.text)
         return response.text
     else:
         raise_exception(f"Failed to fetch data from {url}. Status code:{response.status_code}")

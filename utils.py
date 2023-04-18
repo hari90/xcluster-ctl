@@ -104,3 +104,6 @@ def validate_guid(guid):
     # Check if the input string matches the GUID pattern
     if not guid_pattern.match(guid):
         raise_exception(f"Invalid GUID: {guid}")
+
+def wrap_color(color : str, text : str):
+    return f"{color}{text}{Color.RESET}"

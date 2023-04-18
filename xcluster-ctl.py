@@ -20,6 +20,19 @@ class PortalConfig:
 
 portal_config = PortalConfig()
 
+class BootstrapInfo:
+    initialized = False
+    databses = []
+    table_ids = []
+    bootstrap_ids = []
+    def __str__(self):
+        if not self.initialized:
+            return "Not initialized"
+
+        return "{'databses': '" + str(self.databses) + "', 'table_ids': '" + str(self.table_ids) + "', 'bootstrap_ids': '" + str(self.bootstrap_ids) + "'}"
+
+bootstrap_info = BootstrapInfo()
+
 class UniverseConfig:
     initialized = False
     universe_uuid = ""
@@ -34,13 +47,11 @@ class UniverseConfig:
     master_web_server_map = []
     tserver_ip_map = []
     tserver_web_server_map = []
-    bootstrap_table_ids = []
-    bootstrap_ids = []
     role = ""
 
     def __str__(self):
         if not self.initialized:
-            return "not initialized"
+            return "Not initialized"
 
         return "{'universe_name': '" + self.universe_name + "', 'master_ips': '" + str(self.master_ip_map) + "', 'tserver_ips': '" + str(self.tserver_ip_map) + \
                 "', 'role': '" + self.role + "'}"
@@ -74,11 +85,14 @@ def write_config_file():
     config_dict = {
         "portal_config": portal_config.__dict__,
         "primary_config": primary_config.__dict__,
-        "standby_config": standby_config.__dict__
+        "standby_config": standby_config.__dict__,
+        "bootstrap_info": bootstrap_info.__dict__
     }
 
     # Serialize objects to JSON
     config_json = json.dumps(config_dict, indent=4)
+    log_to_file("New Config",config_json)
+
     # Write JSON to file
     with open(config_file, "w") as f:
         f.write(config_json)
@@ -105,12 +119,13 @@ def read_config_file():
         portal_config.__dict__ = config_dict["portal_config"]
         primary_config.__dict__ = config_dict["primary_config"]
         standby_config.__dict__ = config_dict["standby_config"]
+        bootstrap_info.__dict__ = config_dict["bootstrap_info"]
 
 def is_configured():
     return primary_config.initialized and standby_config.initialized
 
-def print_header()/opt/yugabyte/yugaware/data/keys/08c0ba0e-3558-40fc-94e5-a87a627de8c5/yb-15-aws-portal-1-key.pem:
-    log(f"[ {Color.BLUE}{primary_config.universe_name}{Color.RESET} -> {Color.BLUE}{standby_config.universe_name}{Color.RESET} ]")
+def print_header():
+    log(f"[ {wrap_color(Color.BLUE, primary_config.universe_name)} -> {wrap_color(Color.BLUE, standby_config.universe_name)} ]")
 
 def validate_ip_csv(ip_str : str):
     """
@@ -271,6 +286,9 @@ def show_config(args):
     log(Color.YELLOW+str(primary_config))
     log("Standby Universe:")
     log(Color.YELLOW+str(standby_config))
+    if bootstrap_info.initialized:
+        log("Bootstrap Info:")
+        log(Color.YELLOW+str(bootstrap_info))
 
 
 required_common_flags = {
@@ -298,7 +316,7 @@ def validate_flags(url : str, ca_cert_path : str, required_flags, universe_name 
 
     for flag in required_flags:
         if flag not in set_flags:
-            raise_exception(f"Required flag {Color.YELLOW}{flag}{Color.RESET} is not set on {Color.YELLOW}{universe_name} {url}")
+            raise_exception(f"Required flag {wrap_color(Color.YELLOW, flag)} is not set on {wrap_color(Color.YELLOW, universe_name)} {wrap_color(Color.YELLOW, url)}")
 
 def validate_flags_on_universe(config: UniverseConfig):
     log(f"Validating flags on {Color.YELLOW}{config.universe_name}")
@@ -313,7 +331,7 @@ def validate_universes(args):
     log(Color.GREEN + "Universe validation successful")
 
 def sync_portal(args):
-    log(f"Synching Poral @{portal_config.url}")
+    log_to_file(f"Synching Poral @{portal_config.url}")
     # curl -k --location --request POST 'https://portal.dev.yugabyte.com/api/v1/customers/11d78d93-1381-4d1d-8393-ba76f47ba7a6/xcluster_configs/sync?targetUniverseUUID=76b9e2c2-8e29-45cf-a6fd-daa7dfe1b993' --header 'X-AUTH-YW-API-TOKEN: 244b3ac7-63bc-47c3-0' --data ''
 
     request_url = f"{portal_config.url}/api/v1/customers/{portal_config.customer_id}/xcluster_configs/sync?targetUniverseUUID={standby_config.universe_uuid}"
@@ -324,7 +342,7 @@ def sync_portal(args):
     response = requests.request("POST", request_url, headers=headers, data=payload, verify=False)
 
     if response.status_code == 200:
-        log(response.text)
+        log_to_file(response.text)
     else:
         log_to_file(response.status_code, request_url, headers)
         raise_exception(f"Failed to sync Portal. Status code:{response.status_code}")
@@ -333,8 +351,6 @@ def sync_portal(args):
 
 def get_xcluster_safe_time_int():
     log(f"Getting xcluster_safe_time from {standby_config.universe_name}\n")
-    current_time = datetime.datetime.utcnow()
-    log(f"Current_time(UTC):\t\t{current_time.strftime('%Y-%m-%d %H:%M:%S.%f')}")
     xcluster_safe_time = run_yb_admin(standby_config, "get_xcluster_safe_time")
     namespace_safe_time_map=[]
     namespace_id = ""
@@ -353,12 +369,6 @@ def get_xcluster_safe_time_int():
             datetime_obj = datetime.datetime.strptime(value, '%Y-%m-%d %H:%M:%S.%f')
             namespace_safe_time_map += [(namespace_id, datetime_obj)]
 
-    if len(namespace_safe_time_map):
-        min_datetime_obj = min(namespace_safe_time_map, key=lambda x: x[1])[1]
-        lag = 0
-        if current_time > min_datetime_obj:
-            lag = current_time - min_datetime_obj
-        log(f"\nMax xcluster safe time lag: {lag}")
     return uninitialized_safe_time, namespace_safe_time_map
 
 def get_xcluster_estimated_data_loss(args):
@@ -377,11 +387,20 @@ def get_xcluster_estimated_data_loss(args):
 
 def get_xcluster_safe_time(args):
     while True:
+        current_time = datetime.datetime.utcnow()
+        log(f"Current_time(UTC):\t\t{current_time.strftime('%Y-%m-%d %H:%M:%S.%f')}")
         uninitialized_safe_time, namespace_safe_time_map = get_xcluster_safe_time_int()
         if not uninitialized_safe_time:
             break
         log(Color.YELLOW+"Some xcluster_safe_time are not initialized. Waiting...\n")
         time.sleep(2)
+
+    if len(namespace_safe_time_map):
+        min_datetime_obj = min(namespace_safe_time_map, key=lambda x: x[1])[1]
+        lag = 0
+        if current_time > min_datetime_obj:
+            lag = current_time - min_datetime_obj
+        log(f"\nMax xcluster safe time lag: {lag}")
 
     log("\n"+Color.GREEN+"Successfully got xcluster_safe_time")
 
@@ -444,7 +463,7 @@ def wait_for_replication_drain(args):
     log(Color.GREEN+"Successfully completed wait for replication drain")
 
 def get_table_ids(databases):
-    log(f"Getting tables for database(s) {','.join(databases)} from {primary_config.universe_name}")
+    log(f"Getting tables for database(s) {wrap_color(Color.YELLOW, ','.join(databases))} from {wrap_color(Color.YELLOW, primary_config.universe_name)}")
     table_ids = []
     result = run_yb_admin(primary_config, f"list_tables include_table_id include_table_type")
     for table_and_db in result:
@@ -477,38 +496,47 @@ def bootstrap_tables(table_ids):
     return bootstrap_ids
 
 def bootstrap_databases(args):
-    if len(primary_config.bootstrap_table_ids) > 0:
+    if bootstrap_info.initialized:
         raise_exception("There is already an available bootstrap. Run setup_replication_with_bootstrap")
 
     if len(args) != 1:
-        databases = input("Please provide a CSV list of database names to bootstrap: ")
+        databases_str = input("Please provide a CSV list of database names to bootstrap: ")
     else:
-        databases = args[0]
-    table_ids = get_table_ids(databases.split(','))
+        databases_str = args[0]
+
+    databases = databases_str.split(',')
+
+    create_snapshot_schedule_if_needed(primary_config, databases)
+    table_ids = get_table_ids(databases)
 
     if len(table_ids) == 0:
         raise_exception("No tables found")
 
     bootstrap_ids = bootstrap_tables(table_ids)
 
-    primary_config.bootstrap_table_ids = table_ids
-    primary_config.bootstrap_ids = bootstrap_ids
+    bootstrap_info.databses = databases
+    bootstrap_info.table_ids = table_ids
+    bootstrap_info.bootstrap_ids = bootstrap_ids
+    bootstrap_info.initialized = True
     write_config_file()
 
     log(Color.GREEN+"Successfully bootstrapped databases. Run setup_replication_with_bootstrap to complete setup")
 
 def clear_bootstrap_from_config():
-    primary_config.bootstrap_table_ids = []
-    primary_config.bootstrap_ids = []
+    bootstrap_info.initialized = False
+    bootstrap_info.databses = []
+    bootstrap_info.table_ids = []
+    bootstrap_info.bootstrap_ids = []
+
     write_config_file()
 
 def clear_bootstrap(args):
-    if len(primary_config.bootstrap_ids) == 0:
+    if not bootstrap_info.initialized:
         log(Color.GREEN+"No pending bootstraps to clear")
         return
 
-    log(f"Deleting {len(primary_config.bootstrap_ids)} streams")
-    for bootstrap in primary_config.bootstrap_ids:
+    log(f"Deleting {len(bootstrap_info.bootstrap_ids)} streams")
+    for bootstrap in bootstrap_info.bootstrap_ids:
         delete_cdc_streams(bootstrap)
 
     clear_bootstrap_from_config()
@@ -516,31 +544,38 @@ def clear_bootstrap(args):
     log(Color.GREEN+"Successfully cleared bootstrap")
 
 def setup_replication_with_bootstrap(args):
-    if len(primary_config.bootstrap_ids) == 0:
+    if not bootstrap_info.initialized:
         bootstrap_databases(args)
 
     log(f"Setting up replication from {primary_config.universe_name} to {standby_config.universe_name} with bootstrap")
 
-    result = run_yb_admin(standby_config, f"setup_universe_replication {primary_config.universe_uuid}_repl {primary_config.master_addresses} {','.join(primary_config.bootstrap_table_ids)} {','.join(primary_config.bootstrap_ids)}")
+    result = run_yb_admin(standby_config, f"setup_universe_replication {primary_config.universe_uuid}_repl {primary_config.master_addresses} {','.join(bootstrap_info.table_ids)} {','.join(bootstrap_info.bootstrap_ids)}")
     log('\n'.join(result))
 
+    create_snapshot_schedule_if_needed(standby_config, bootstrap_info.databses)
+    set_standby_role(args)
     clear_bootstrap_from_config()
 
-    log(Color.GREEN+"Successfully setup replication")
-    set_standby_role(args)
     sync_portal(args)
 
+    log(Color.GREEN+"Successfully setup replication")
+
 def setup_replication(args):
-    if len(primary_config.bootstrap_ids) > 0:
+    if bootstrap_info.initialized:
         raise_exception("There is already an available bootstrap. Run setup_replication_with_bootstrap")
 
     log(f"Setting up replication from {primary_config.universe_name} to {standby_config.universe_name} without bootstrap")
 
     if len(args) != 1:
-        databases = input("Please provide a CSV list of database names to bootstrap: ")
+        databases_str = input("Please provide a CSV list of database names to bootstrap: ")
     else:
-        databases = args[0]
-    table_ids = get_table_ids(databases.split(','))
+        databases_str = args[0]
+
+    databases = databases_str.split(',')
+    create_snapshot_schedule_if_needed(primary_config, databases)
+    create_snapshot_schedule_if_needed(standby_config, databases)
+
+    table_ids = get_table_ids(databases)
 
     if len(table_ids) == 0:
         raise_exception("No tables found")
@@ -548,17 +583,19 @@ def setup_replication(args):
     result = run_yb_admin(standby_config, f"setup_universe_replication {primary_config.universe_uuid}_repl {primary_config.master_addresses} {','.join(table_ids)}")
     log('\n'.join(result))
 
-    log(Color.GREEN+"Successfully setup replication")
     set_standby_role(args)
     sync_portal(args)
 
+    log(Color.GREEN+"Successfully setup replication")
+
+
 def delete_replication(args):
     replication_name, stream_count, role = get_replication_info_int()
-    log(f"Deleting replication {replication_name} from {primary_config.universe_name} to {standby_config.universe_name}")
+    log(f"Deleting replication {wrap_color(Color.YELLOW,replication_name)} from {wrap_color(Color.YELLOW,primary_config.universe_name)} to {wrap_color(Color.YELLOW,standby_config.universe_name)}")
     result = run_yb_admin(standby_config, f"delete_universe_replication {primary_config.universe_uuid}_{replication_name}")
     log('\n'.join(result))
-    log(Color.GREEN+"Successfully deleted replication")
     sync_portal(args)
+    log(Color.GREEN+"Successfully deleted replication")
 
 def pause_replication(args):
     replication_name, stream_count, role = get_replication_info_int()
@@ -589,16 +626,25 @@ def swap_universe_configs(args):
 def planned_failover(args):
     log(f"Performing a planned failover from {primary_config.universe_name} to {standby_config.universe_name}")
     wait_for_replication_drain(args)
-    get_xcluster_safe_time(args)
-    if not is_input_yes("Are you sure you want to proceed"):
-        log(Color.YELLOW+"Planned failover abandoned")
-        return
+    current_time = datetime.datetime.utcnow()
+    while True:
+        time.sleep(1)
+        uninitialized_safe_time, namespace_safe_time_map = get_xcluster_safe_time_int()
+        if len(namespace_safe_time_map) == 0:
+            raise_exception("No xcluster_safe_time found")
+        if not uninitialized_safe_time:
+            min_datetime_obj = min(namespace_safe_time_map, key=lambda x: x[1])[1]
+            if min_datetime_obj > current_time:
+                break
+
+        log(Color.YELLOW+f"Waiting for xcluster_safe_time to catch up to {current_time.strftime('%Y-%m-%d %H:%M:%S.%f ...')}\n")
+
     set_active_role(args)
     delete_replication(args)
     swap_universe_configs(args)
     setup_replication_with_bootstrap(args)
 
-    log(Color.GREEN+f"Successfully failed over from {standby_config.universe_name} to {primary_config.universe_name}")
+    log(Color.GREEN+f"Successfully failed over from {Color.YELLOW}{standby_config.universe_name}{Color.GREEN} to {Color.YELLOW}{primary_config.universe_name}")
 
 def unplanned_failover(args):
     log(f"Performing a unplanned failover from {primary_config.universe_name} to {standby_config.universe_name}")
@@ -620,7 +666,7 @@ def unplanned_failover(args):
 
     log(Color.YELLOW+f"\nOnce {standby_config.universe_name} comes back online drop its database and recreate the database schema. Then use YBA to setup replication with backup and restore. After it completes run set_standby_role\n")
 
-    log(Color.GREEN+f"Successfully failed over from {standby_config.universe_name} to {primary_config.universe_name}")
+    log(Color.GREEN+f"Successfully failed over from {Color.YELLOW}{standby_config.universe_name}{Color.GREEN} to {Color.YELLOW}{primary_config.universe_name}")
 
 def reload_roles_int(args):
     if is_standy_role(primary_config):
@@ -697,7 +743,6 @@ def extract_consumer_registry(data: str):
 
     return replication_name, stream_count, role
 
-
 def get_replication_info_int():
     log("Getting current replication info")
     result = http_get(f"{standby_config.master_web_server_map[0]}xcluster-config", standby_config.ca_cert_path)
@@ -708,6 +753,45 @@ def get_replication_info(args):
     log(f"{Color.GREEN}Found replication group {Color.YELLOW}{replication_name}{Color.GREEN} with {Color.YELLOW}{stream_count}{Color.GREEN} tables")
     if role != "STANDBY":
         log(f"{Color.RED}STANDBY role has not been set on {Color.RESET}{standby_config.universe_name}{Color.RED}. Please run 'set_standby_role'")
+
+def get_snapshot_info(config: UniverseConfig):
+    result = run_yb_admin(config, "list_snapshot_schedules")
+    json_data = json.loads(''.join(result))
+
+    database_schedules = {}
+    for schedule in json_data["schedules"]:
+        schedule_id = schedule["id"]
+        db_name = schedule["options"]["filter"].split('.')[-1]
+        if db_name not in database_schedules:
+            database_schedules[db_name] = []
+        database_schedules[db_name] += [schedule_id]
+
+    return database_schedules
+
+def create_snapshot_schedule(config: UniverseConfig, database_name):
+    log(f"Setting up PITR snapshot schedule for {wrap_color(Color.YELLOW, database_name)} on {wrap_color(Color.YELLOW, config.universe_name)}")
+    log_to_file(run_yb_admin(config, f"create_snapshot_schedule 1440 10080 ysql.{database_name}"))
+    log(Color.GREEN+"Successfully created PITR snapshot schedule")
+
+def create_snapshot_schedule_if_needed(config: UniverseConfig, databases):
+    database_schedules = get_snapshot_info(config)
+    for database_name in databases:
+        if  database_name not in database_schedules:
+            create_snapshot_schedule(config, database_name)
+
+def delete_snapshot_schedule(config: UniverseConfig, schedule_id):
+    log(run_yb_admin(config, f"delete_snapshot_schedule {schedule_id}"))
+
+def list_snapshot_schedules_for_iniverse(config: UniverseConfig):
+    log(f"Listing snapshot schedules for {Color.YELLOW}{config.universe_name}")
+    database_snapshots = get_snapshot_info(config)
+    for database in database_snapshots:
+        log(f"Database: {database}, Schedule_id(s): {database_snapshots[database]}")
+
+def list_snapshot_schedules(args):
+    list_snapshot_schedules_for_iniverse(primary_config)
+    list_snapshot_schedules_for_iniverse(standby_config)
+    log(Color.GREEN+"Successfully listed snapshot schedules")
 
 def main():
     # Define a dictionary to map user input to functions
@@ -735,6 +819,7 @@ def main():
         "switch_universe_configs" : swap_universe_configs,
         "get_xcluster_estimated_data_loss" : get_xcluster_estimated_data_loss,
         "sync_portal" : sync_portal,
+        "list_snapshot_schedules" : list_snapshot_schedules,
     }
 
     usage_str=f"Usage: python3 {sys.argv[0]} <command> [args]\n"\

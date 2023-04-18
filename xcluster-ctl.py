@@ -280,7 +280,7 @@ def configure(args):
 
     copy_certs(primary_config, standby_config, "repl")
     copy_certs(standby_config, primary_config, "repl")
-    sync_portal()
+    sync_portal(args)
 
     reload_roles(args)
 
@@ -436,6 +436,13 @@ def is_standy_role(config: UniverseConfig):
     result = http_get(f"{config.master_web_server_map[0]}xcluster-config", config.ca_cert_path)
     return "role: STANDBY" in result
 
+def set_standby_role_int():
+    run_yb_admin(standby_config, "change_xcluster_role STANDBY")
+    standby_config.role = "STANDBY"
+    write_config_file()
+    # Wait for async processing
+    time.sleep(2)
+
 def set_standby_role(args):
     log(f"Setting {standby_config.universe_name} to STANDBY")
     reload_universe_roles(standby_config)
@@ -443,15 +450,13 @@ def set_standby_role(args):
         log(Color.GREEN+"Already in STANDBY role")
         return
 
-    run_yb_admin(standby_config, "change_xcluster_role STANDBY")
-    standby_config.role = "STANDBY"
-    write_config_file()
-    # Wait for async processing
-    time.sleep(2)
+    set_standby_role_int()
+
     log(Color.GREEN+"Successfully set role to STANDBY")
 
     database_safe_time_map = wait_for_xcluster_safe_time_to_catchup()
     create_snapshot_schedule_if_needed(standby_config, database_safe_time_map.keys())
+    create_snapshot_schedule_if_needed(primary_config, database_safe_time_map.keys())
 
 def set_active_role(args):
     log(f"Setting {standby_config.universe_name} to ACTIVE")
@@ -610,9 +615,9 @@ def setup_replication_with_bootstrap(args):
 
     create_snapshot_schedule_if_needed(standby_config, bootstrap_info.databses)
     clear_bootstrap_from_config()
-    set_standby_role(args)
-
+    set_standby_role_int()
     sync_portal(args)
+    wait_for_xcluster_safe_time_to_catchup()
 
     log(Color.GREEN+"Successfully setup replication")
 
@@ -643,8 +648,9 @@ def setup_replication(args):
     result = run_yb_admin(standby_config, f"setup_universe_replication {primary_config.universe_uuid}_{replication_name} {primary_config.master_addresses} {','.join(table_ids)}")
     log('\n'.join(result))
 
-    set_standby_role(args)
+    set_standby_role_int()
     sync_portal(args)
+    wait_for_xcluster_safe_time_to_catchup()
 
     log(Color.GREEN+"Successfully setup replication")
 
@@ -886,23 +892,20 @@ def get_snapshot_info(config: UniverseConfig):
         db_name = schedule["options"]["filter"].split('.')[-1]
         if db_name not in database_schedules:
             database_schedules[db_name] = []
-        database_schedules[db_name] = schedule_id
+        database_schedules[db_name] += [schedule_id]
 
     return database_schedules
 
-def create_snapshot_schedule(config: UniverseConfig, database_name):
+def create_snapshot_schedule_int(config: UniverseConfig, database_name):
     log(f"Setting up PITR snapshot schedule for {wrap_color(Color.YELLOW, database_name)} on {wrap_color(Color.YELLOW, config.universe_name)}")
     log_to_file(run_yb_admin(config, f"create_snapshot_schedule 1440 10080 ysql.{database_name}"))
-    log(Color.GREEN+"Successfully created PITR snapshot schedule")
+    log(Color.GREEN+f"Successfully created PITR snapshot schedule for {database_name}")
 
 def create_snapshot_schedule_if_needed(config: UniverseConfig, databases):
     database_schedules = get_snapshot_info(config)
     for database_name in databases:
         if  database_name not in database_schedules:
-            create_snapshot_schedule(config, database_name)
-
-def delete_snapshot_schedule(config: UniverseConfig, schedule_id):
-    log(run_yb_admin(config, f"delete_snapshot_schedule {schedule_id}"))
+            create_snapshot_schedule_int(config, database_name)
 
 def list_snapshot_schedules_for_iniverse(config: UniverseConfig):
     log(f"Listing snapshot schedules for {Color.YELLOW}{config.universe_name}")
@@ -914,6 +917,51 @@ def list_snapshot_schedules(args):
     list_snapshot_schedules_for_iniverse(primary_config)
     list_snapshot_schedules_for_iniverse(standby_config)
     log(Color.GREEN+"Successfully listed snapshot schedules")
+
+def create_snapshot_schedules(args):
+    log(f"Creating snapshot schedules on {standby_config.universe_name}")
+    if len(args) != 1:
+        databases_str = input("Please provide a CSV list of database names to bootstrap: ")
+    else:
+        databases_str = args[0]
+
+    databases = databases_str.split(',')
+    database_snapshots = get_snapshot_info(standby_config)
+    for database in databases:
+        if database in database_snapshots:
+            log(f"Database {database} already has a snapshot schedule {database_snapshots[database]}. Skipping")
+            continue
+        create_snapshot_schedule_int(standby_config, database)
+
+def delete_snapshot_schedules(args):
+    log(f"Deleting snapshot schedules on {standby_config.universe_name}")
+
+    if len(args) != 1:
+        databases_str = input("Please provide a CSV list of database names to bootstrap: ")
+    else:
+        databases_str = args[0]
+
+    databases = databases_str.split(',')
+
+    database_snapshots = get_snapshot_info(standby_config)
+    for database in databases:
+        if database in database_snapshots:
+            for schedule_id in database_snapshots[database]:
+                log(f"Deleting snapshot schedule {wrap_color(Color.YELLOW, schedule_id)} for Database {wrap_color(Color.YELLOW, database)}")
+                log(''.join(run_yb_admin(standby_config, f"delete_snapshot_schedule {schedule_id}")))
+
+    log("Waiting for the delete to complete")
+    while True:
+        database_snapshots = get_snapshot_info(standby_config)
+        for database in databases:
+            if database in database_snapshots:
+                print(".", end="", flush=True)
+                time.sleep(2)
+                continue
+        break
+
+    log(Color.GREEN+f"\nSuccessfully deleted of snapshot schedule(s) for {databases_str}.")
+
 
 def restore_to_point_in_time(config: UniverseConfig, database: str, snapshot_id: str, restore_ime: datetime):
     restore_time_str = restore_ime.strftime('%Y-%m-%d %H:%M:%S.%f')
@@ -953,6 +1001,8 @@ def main():
         "get_xcluster_estimated_data_loss" : get_xcluster_estimated_data_loss,
         "sync_portal" : sync_portal,
         "list_snapshot_schedules" : list_snapshot_schedules,
+        "create_snapshot_schedules" : create_snapshot_schedules,
+        "delete_snapshot_schedules" : delete_snapshot_schedules,
     }
 
     usage_str=f"Usage: python3 {sys.argv[0]} <command> [args]\n"\

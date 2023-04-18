@@ -794,6 +794,9 @@ def list_snapshot_schedules(args):
     log(Color.GREEN+"Successfully listed snapshot schedules")
 
 def main():
+    # logs latest commit and time of commit
+    commit_history = run_subprocess(["git", "log", "-1"])
+    log(commit_history[0], "\t" , commit_history[2])
     # Define a dictionary to map user input to functions
     function_map = {
         "configure": configure,

@@ -405,12 +405,7 @@ def get_xcluster_estimated_data_loss(args):
     log("\n"+Color.GREEN+"Successfully got estimated data loss")
 
 def get_xcluster_safe_time(args):
-    replication_info = get_replication_info_int()
-    if not replication_info.valid:
-        log(Color.RED+"No replication in progress")
-        return
-
-    log(f"{Color.GREEN}Found replication group {Color.YELLOW}{replication_info.name}{Color.GREEN} with {Color.YELLOW}{replication_info.table_count}{Color.GREEN} tables")
+    get_replication_info(args)
 
     while True:
         current_time = datetime.datetime.utcnow()

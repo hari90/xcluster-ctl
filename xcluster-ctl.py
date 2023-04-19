@@ -228,7 +228,7 @@ def copy_certs(from_config : UniverseConfig, to_config : UniverseConfig, replica
         copy_file_to_remote(node, to_config.ssh_port, to_config.pem_file_path, from_config.ca_cert_path, f"yugabyte-tls-producer/{from_config.universe_uuid}_{replication_name}/{ca_file}")
 
 def get_cluster_config_from_user(cluster_type : str):
-    ssh_port_str = input(f"Enter {cluster_type} universe ssh port (default is 54422): ")
+    ssh_port_str = get_input(f"Enter {cluster_type} universe ssh port (default is 54422): ")
     if ssh_port_str.strip() == "":
         ssh_port = 54422
     else:
@@ -236,14 +236,14 @@ def get_cluster_config_from_user(cluster_type : str):
         if ssh_port <= 0:
             raise_exception("Invalid port number")
 
-    pem_file = input(f"Enter {cluster_type} universe ssh cert file path: ")
+    pem_file = get_input(f"Enter {cluster_type} universe ssh cert file path: ")
     if not os.path.exists(pem_file):
         raise_exception(f"File {pem_file} not found")
 
     return ssh_port, pem_file
 
 def configure(args):
-    full_url = input("Enter the portal url: ")
+    full_url = get_input("Enter the portal url: ")
     url_parts = urlsplit(full_url)
     portal_config.url = urlunsplit((url_parts.scheme, url_parts.netloc, '', '', ''))
     if len(portal_config.url) == 0:
@@ -251,23 +251,23 @@ def configure(args):
 
     # log(http_get(f"{portal_config.url}/profile", False))
     log(f"Get the Customer ID and API Token from {Color.YELLOW}{portal_config.url}/profile")
-    portal_config.customer_id = input("Enter the customer id: ")
+    portal_config.customer_id = get_input("Enter the customer id: ")
     if portal_config.customer_id.strip() == "":
         raise_exception("Customer id cannot be empty")
     validate_guid(portal_config.customer_id)
 
-    portal_config.token = input("Enter the auth token: ")
+    portal_config.token = get_input("Enter the auth token: ")
     if portal_config.token.strip() == "":
         raise_exception("Auth token cannot be empty")
     validate_guid(portal_config.token)
 
-    master_ips = input(f"\nEnter one Primary universe master IP: ")
+    master_ips = get_input(f"\nEnter one Primary universe master IP: ")
     ipaddress.ip_address(master_ips)
 
     ssh_port, pem_file = get_cluster_config_from_user("Primary")
     init_universe(primary_config, master_ips, ssh_port, pem_file)
 
-    master_ips = input("\nEnter one Secondary universe master IP: ")
+    master_ips = get_input("\nEnter one Secondary universe master IP: ")
     ipaddress.ip_address(master_ips)
 
     log(f"\nssh port:\t\t{ssh_port}\nssh cert file path:\t{pem_file}")
@@ -538,7 +538,7 @@ def bootstrap_databases(args):
         raise_exception("There is already an available bootstrap. Run setup_replication_with_bootstrap command")
 
     if len(args) != 1:
-        databases_str = input("Please provide a CSV list of database names to bootstrap: ")
+        databases_str = get_input("Please provide a CSV list of database names to bootstrap: ")
     else:
         databases_str = args[0]
 
@@ -595,8 +595,8 @@ def setup_replication_with_bootstrap(args):
     log(f"Setting up replication from {primary_config.universe_name} to {standby_config.universe_name} with bootstrap")
 
     if len(args) != 2:
-        replication_name = input("Please provide a replication name: ")
-        databases_str = input("Please provide a CSV list of database names: ")
+        replication_name = get_input("Please provide a replication name: ")
+        databases_str = get_input("Please provide a CSV list of database names: ")
     else:
         replication_name = args[0]
         databases_str = args[1]
@@ -624,8 +624,8 @@ def setup_replication(args):
     log(f"Setting up replication from {primary_config.universe_name} to {standby_config.universe_name} without bootstrap")
 
     if len(args) != 2:
-        replication_name = input("Please provide a replication name: ")
-        databases_str = input("Please provide a CSV list of database names: ")
+        replication_name = get_input("Please provide a replication name: ")
+        databases_str = get_input("Please provide a CSV list of database names: ")
     else:
         replication_name = args[0]
         databases_str = args[1]
@@ -817,8 +817,8 @@ def add_tables(args):
     log(f"Adding tables to replication group {replication_info.name}")
 
     if len(args) != 2:
-        database = input("Please provide the database name: ")
-        table_str = input("Please provide a CSV list of table names: ")
+        database = get_input("Please provide the database name: ")
+        table_str = get_input("Please provide a CSV list of table names: ")
     else:
         database  = args[0]
         table_str = args[1]
@@ -848,8 +848,8 @@ def remove_tables(args):
     log(f"Removing tables from replication group {replication_info.name}")
 
     if len(args) != 2:
-        database = input("Please provide the database name: ")
-        table_str = input("Please provide a CSV list of table names: ")
+        database = get_input("Please provide the database name: ")
+        table_str = get_input("Please provide a CSV list of table names: ")
     else:
         database  = args[0]
         table_str = args[1]
@@ -972,7 +972,7 @@ def list_snapshot_schedules(args):
 def create_snapshot_schedules(args):
     log(f"Creating snapshot schedules on {standby_config.universe_name}")
     if len(args) != 1:
-        databases_str = input("Please provide a CSV list of database names to bootstrap: ")
+        databases_str = get_input("Please provide a CSV list of database names to bootstrap: ")
     else:
         databases_str = args[0]
 
@@ -988,7 +988,7 @@ def delete_snapshot_schedules(args):
     log(f"Deleting snapshot schedules on {standby_config.universe_name}")
 
     if len(args) != 1:
-        databases_str = input("Please provide a CSV list of database names to bootstrap: ")
+        databases_str = get_input("Please provide a CSV list of database names to bootstrap: ")
     else:
         databases_str = args[0]
 

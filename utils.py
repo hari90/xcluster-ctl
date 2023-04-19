@@ -110,7 +110,7 @@ def move_file(from_path : str, to_path : str):
     shutil.move(from_path, to_path)
 
 def is_input_yes(question : str):
-    answer = input(f"{question}? (yes/no): ")
+    answer = get_input(f"{question}? (yes/no): ")
     return answer.lower() in ["yes","y"]
 
 def validate_guid(guid):
@@ -125,3 +125,10 @@ def validate_guid(guid):
 
 def wrap_color(color : str, text : str):
     return f"{color}{text}{Color.RESET}"
+
+def get_input(message : str):
+    log_to_file(message)
+    user_input = input(message)
+    log_to_file(user_input)
+    return user_input
+

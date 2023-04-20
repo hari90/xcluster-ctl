@@ -447,8 +447,7 @@ def get_xcluster_safe_time(args):
         previous_lines = print_str.count('\n') + 1
         if not keep_running:
             break
-        if not monitor:
-            time.sleep(2)
+        time.sleep(2)
 
     log("\n"+Color.GREEN+"Successfully got xcluster_safe_time")
 

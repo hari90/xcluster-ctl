@@ -683,7 +683,7 @@ def resume_replication(args):
     sync_portal(args)
 
 def swap_universe_configs(args):
-    log(f"Swapping Primay and Standby universes")
+    log(f"Swapping Primary and Standby universes")
     global standby_config, primary_config
     temp = standby_config
     standby_config = primary_config
@@ -773,7 +773,7 @@ def unplanned_failover(args):
     for database in database_safe_time_map.keys():
         if database not in snapshot_info:
             raise_exception(f"Snapshot not found for database {database}. Aborting failover")
-        restore_to_point_in_time(standby_config, database, snapshot_info[database], database_safe_time_map[database])
+        restore_to_point_in_time(standby_config, database, snapshot_info[database][0], database_safe_time_map[database])
 
     set_active_role(args)
     delete_replication(args)

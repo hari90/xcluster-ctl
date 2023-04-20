@@ -316,7 +316,7 @@ required_common_flags = {
 required_master_flags = required_common_flags.union({
     "enable_automatic_tablet_splitting=false",
     "enable_tablet_split_of_xcluster_replicated_tables=false",
-    "cdc_wal_retention_time_secs=900"
+    # "cdc_wal_retention_time_secs=900"
 })
 
 required_tserver_flags = required_common_flags
@@ -443,7 +443,7 @@ def get_xcluster_safe_time(args):
 
         for i in range(previous_lines):
             print(LINE_UP, end=LINE_CLEAR)
-        log(print_str)
+        print(print_str)
         previous_lines = print_str.count('\n') + 1
         if not keep_running:
             break
@@ -654,7 +654,9 @@ def clear_bootstrap(args):
     log(f"Deleting {len(bootstrap_info.bootstrap_ids)} streams")
     i=1
     for bootstrap in bootstrap_info.bootstrap_ids:
-        print(f"{i}/{len(bootstrap_info.bootstrap_ids)}", end='\r')
+        if i >1 :
+            print(LINE_UP, end=LINE_CLEAR)
+        print(f"{i}/{len(bootstrap_info.bootstrap_ids)}")
         delete_cdc_streams(bootstrap)
         i=i+1
 

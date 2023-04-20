@@ -355,7 +355,8 @@ def sync_portal(args):
         log_to_file(response.text)
     else:
         log_to_file(response.status_code, request_url, headers)
-        raise_exception(f"Failed to sync Portal. Status code:{response.status_code}")
+        log(Color.RED+f"Failed to sync Portal. Status code:{response.status_code}. The API token may have expired. Please update the token in config.json and re-run sync_portal command.")
+        return
 
     log(Color.GREEN + "Successfully synced Portal")
 
@@ -431,9 +432,9 @@ def is_standy_role(config: UniverseConfig):
     result = http_get(f"{config.master_web_server_map[0]}xcluster-config", config.ca_cert_path)
     return "role: STANDBY" in result
 
-def set_standby_role_int():
-    run_yb_admin(standby_config, "change_xcluster_role STANDBY")
-    standby_config.role = "STANDBY"
+def set_role_int(config: UniverseConfig, role: str):
+    run_yb_admin(config, f"change_xcluster_role {role}")
+    standby_config.role = role
     write_config_file()
     # Wait for async processing
     time.sleep(2)
@@ -445,7 +446,7 @@ def set_standby_role(args):
         log(Color.GREEN+"Already in STANDBY role")
         return
 
-    set_standby_role_int()
+    set_role_int(standby_config, "STANDBY")
 
     log(Color.GREEN+"Successfully set role to STANDBY")
 
@@ -461,12 +462,8 @@ def set_active_role(args):
         log(Color.GREEN+"Already in ACTIVE role")
         return
 
-    run_yb_admin(standby_config, "change_xcluster_role ACTIVE")
-    standby_config.role = "ACTIVE"
-    write_config_file()
+    set_role_int(standby_config, "ACTIVE")
 
-    # Wait for async processing
-    time.sleep(2)
     log(Color.GREEN+"Successfully set role to ACTIVE")
 
 def get_cdc_streams():
@@ -590,6 +587,15 @@ def ensure_no_replication_in_progress():
         raise_exception(f"Replication {Color.YELLOW}{replication_info.name}{Color.RED} already in progress."\
                         " To add more tables to an existing replication, run add_table command")
 
+def reload_and_set_correct_roles():
+    reload_roles_int()
+    if primary_config.role == "STANDBY":
+        log(f"Setting {primary_config.universe_name} role to ACTIVE")
+        set_role_int(primary_config, "ACTIVE")
+    if standby_config.role != "STANDBY":
+        set_role_int(standby_config, "STANDBY")
+        log(f"Setting {standby_config.universe_name} role to STANDBY")
+
 def setup_replication_with_bootstrap(args):
     ensure_no_replication_in_progress()
     log(f"Setting up replication from {primary_config.universe_name} to {standby_config.universe_name} with bootstrap")
@@ -610,7 +616,7 @@ def setup_replication_with_bootstrap(args):
 
     create_snapshot_schedule_if_needed(standby_config, bootstrap_info.databses)
     clear_bootstrap_from_config()
-    set_standby_role_int()
+    reload_and_set_correct_roles()
     sync_portal(args)
     wait_for_xcluster_safe_time_to_catchup()
 
@@ -643,7 +649,8 @@ def setup_replication(args):
     result = run_yb_admin(standby_config, f"setup_universe_replication {primary_config.universe_uuid}_{replication_name} {primary_config.master_addresses} {','.join(table_ids)}")
     log('\n'.join(result))
 
-    set_standby_role_int()
+    reload_and_set_correct_roles()
+
     sync_portal(args)
     wait_for_xcluster_safe_time_to_catchup()
 
@@ -658,6 +665,7 @@ def delete_replication(args):
     log(f"Deleting replication {wrap_color(Color.YELLOW,replication_info.name)} from {wrap_color(Color.YELLOW,primary_config.universe_name)} to {wrap_color(Color.YELLOW,standby_config.universe_name)}")
     result = run_yb_admin(standby_config, f"delete_universe_replication {primary_config.universe_uuid}_{replication_info.name}")
     log('\n'.join(result))
+    set_active_role(args)
     sync_portal(args)
     log(Color.GREEN+"Successfully deleted replication")
 
@@ -789,24 +797,14 @@ def reload_universe_roles(config: UniverseConfig):
     else:
         config.role = "ACTIVE"
 
-def reload_roles_int(args):
+def reload_roles_int():
     reload_universe_roles(primary_config)
     reload_universe_roles(standby_config)
 
     write_config_file()
 
 def reload_roles(args):
-    if is_standy_role(primary_config):
-        primary_config.role = "STANDBY"
-    else:
-        primary_config.role = "ACTIVE"
-
-    if is_standy_role(standby_config):
-        standby_config.role = "STANDBY"
-    else:
-        standby_config.role = "ACTIVE"
-
-    write_config_file()
+    reload_roles_int()
     show_config(args)
 
 def add_tables(args):

@@ -520,7 +520,7 @@ def delete_cdc_streams(stream_id):
     result = run_yb_admin(primary_config, f"delete_cdc_stream {stream_id} force_delete")
     log_to_file(result)
 
-def bootstrap_tables(table_ids):
+def bootstrap_tables_int(table_ids):
     log(f"Checkpointing {len(table_ids)} tables")
 
     result = run_yb_admin(primary_config, "bootstrap_cdc_producer "+','.join(table_ids))
@@ -547,7 +547,7 @@ def bootstrap_databases(args):
     if len(table_ids) == 0:
         raise_exception("No tables found")
 
-    bootstrap_ids = bootstrap_tables(table_ids)
+    bootstrap_ids = bootstrap_tables_int(table_ids)
 
     bootstrap_info.databses = databases
     bootstrap_info.table_ids = list(table_ids)
@@ -556,6 +556,64 @@ def bootstrap_databases(args):
     write_config_file()
 
     log(Color.GREEN+"Successfully bootstrapped databases. Run setup_replication_with_bootstrap command to complete setup")
+
+def bootstrap_tables(args):
+    replication_info = get_replication_info_int()
+    if not replication_info.valid:
+        raise_exception("No replication in progress")
+
+    if bootstrap_info.initialized:
+        raise_exception("There is already an available bootstrap. Run add_tables_with_bootstrap command or clear_bootstrap command")
+
+    log(f"Bootstrapping tables to add to replication group {replication_info.name}")
+
+    if len(args) != 2:
+        database = get_input("Please provide the database name: ")
+        table_str = get_input("Please provide a CSV list of table names: ")
+    else:
+        database  = args[0]
+        table_str = args[1]
+
+    table_map = get_primary_tables_map([database])
+
+    table_ids = []
+
+    tables = table_str.split(',')
+    for table in tables:
+        db_table = f"{database}.{table}"
+        if db_table not in table_map:
+            raise_exception(f"Table {table} not found in {database}")
+        table_ids += [table_map[db_table]]
+
+    bootstrap_ids = bootstrap_tables_int(table_ids)
+
+    bootstrap_info.databses = [database]
+    bootstrap_info.table_ids = list(table_ids)
+    bootstrap_info.bootstrap_ids = bootstrap_ids
+    bootstrap_info.initialized = True
+    write_config_file()
+
+    log(Color.GREEN+f"Successfully bootstrapped {len(bootstrap_info.table_ids)} tables. Run setup_replication_with_bootstrap command to complete setup or clear_bootstrap command to clear bootstrap")
+
+def add_tables_with_bootstrap(args):
+    replication_info = get_replication_info_int()
+    if not replication_info.valid:
+        raise_exception("No replication in progress")
+
+    if not bootstrap_info.initialized:
+        raise_exception("No available bootstrap. Run bootstrap_tables command or add_tables command")
+
+    log(f"Adding {len(bootstrap_info.table_ids)} tables from {','.join(bootstrap_info.databses)} to add to replication group {replication_info.name}")
+
+    result = run_yb_admin(standby_config, f"alter_universe_replication {primary_config.universe_uuid}_{replication_info.name} add_table {','.join(bootstrap_info.table_ids)} {','.join(bootstrap_info.bootstrap_ids)}")
+    log('\n'.join(result))
+
+    clear_bootstrap_from_config()
+    sync_portal(args)
+    wait_for_xcluster_safe_time_to_catchup()
+
+    log(Color.GREEN+"Successfully added tables to replication")
+    get_replication_info(args)
 
 def clear_bootstrap_from_config():
     bootstrap_info.initialized = False
@@ -832,7 +890,8 @@ def add_tables(args):
             raise_exception(f"Table {table} not found in {database}")
         table_ids += [table_map[db_table]]
 
-    log(run_yb_admin(standby_config, f"alter_universe_replication {primary_config.universe_uuid}_{replication_info.name} add_table {','.join(table_ids)}"))
+    result = run_yb_admin(standby_config, f"alter_universe_replication {primary_config.universe_uuid}_{replication_info.name} add_table {','.join(table_ids)}")
+    log('\n'.join(result))
     sync_portal(args)
 
     wait_for_xcluster_safe_time_to_catchup()
@@ -1043,6 +1102,8 @@ def main():
         "remove_tables" : remove_tables,
         "wait_for_replication_drain" : wait_for_replication_drain,
         "bootstrap_databases" : bootstrap_databases,
+        "bootstrap_tables" : bootstrap_tables,
+        "add_tables_with_bootstrap" : add_tables_with_bootstrap,
         "clear_bootstrap" : clear_bootstrap,
         "delete_replication" : delete_replication,
         "reload_roles" : reload_roles,

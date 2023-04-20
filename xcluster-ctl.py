@@ -361,7 +361,6 @@ def sync_portal(args):
     log(Color.GREEN + "Successfully synced Portal")
 
 def get_xcluster_safe_time_int():
-    log(f"Getting xcluster_safe_time from {standby_config.universe_name}")
     database_map = get_databases(standby_config)
     xcluster_safe_time = run_yb_admin(standby_config, "get_xcluster_safe_time")
     database_safe_time_map={}
@@ -384,9 +383,13 @@ def get_xcluster_safe_time_int():
 
     return uninitialized_safe_time, database_safe_time_map
 
-def print_xcluster_safe_time(database_safe_time_map):
-    for database_name in database_safe_time_map:
-            log(f"\ndatabase_name:\t\t{database_name}\nxcluster_safe_time:\t{database_safe_time_map[database_name]}")
+def xcluster_safe_time_str(database_safe_time_map):
+    lines = []
+    databases = list(database_safe_time_map.keys())
+    databases.sort()
+    for database_name in databases:
+            lines += [f"\ndatabase_name:\t\t{database_name}\nxcluster_safe_time:\t{database_safe_time_map[database_name]}"]
+    return '\n'.join(lines)
 
 def get_xcluster_estimated_data_loss(args):
     log(f"Getting estimated data loss from {standby_config.universe_name}")
@@ -408,23 +411,44 @@ def get_xcluster_estimated_data_loss(args):
 def get_xcluster_safe_time(args):
     get_replication_info(args)
 
-    while True:
+    monitor = len(args) > 0 and args[0] == "monitor"
+
+    if monitor:
+        print("Press Ctrl+C to stop monitoring")
+        signal.signal(signal.SIGINT, signal_handler)
+
+    print()
+
+    keep_running = True
+    previous_lines = 0
+
+    while not process_stopped:
+        print_str = ""
         current_time = datetime.datetime.utcnow()
         uninitialized_safe_time, database_safe_time_map = get_xcluster_safe_time_int()
-        log(f"Current time(UTC):\t{current_time.strftime('%Y-%m-%d %H:%M:%S.%f')}")
-        print_xcluster_safe_time(database_safe_time_map)
+        print_str += f"Current time(UTC):\t{current_time.strftime('%Y-%m-%d %H:%M:%S.%f')}"
+        print_str += "\n" + xcluster_safe_time_str(database_safe_time_map)
 
-        if not uninitialized_safe_time:
+        if uninitialized_safe_time:
+            print_str = Color.YELLOW+"\nSome xcluster_safe_time are not initialized. Waiting...\n"+Color.RESET
+        else:
+            if not monitor:
+                keep_running = False
+            if len(database_safe_time_map):
+                min_datetime_obj = min(database_safe_time_map.values())
+                lag = datetime.timedelta(0)
+                if current_time > min_datetime_obj:
+                    lag = current_time - min_datetime_obj
+                print_str += f"\n\nMax xcluster safe time lag: {lag}"
+
+        for i in range(previous_lines):
+            print(LINE_UP, end=LINE_CLEAR)
+        log(print_str)
+        previous_lines = print_str.count('\n') + 1
+        if not keep_running:
             break
-        log(Color.YELLOW+"Some xcluster_safe_time are not initialized. Waiting...\n")
-        time.sleep(2)
-
-    if len(database_safe_time_map):
-        min_datetime_obj = min(database_safe_time_map.values())
-        lag = 0
-        if current_time > min_datetime_obj:
-            lag = current_time - min_datetime_obj
-        log(f"\nMax xcluster safe time lag: {lag}")
+        if not monitor:
+            time.sleep(2)
 
     log("\n"+Color.GREEN+"Successfully got xcluster_safe_time")
 
@@ -763,7 +787,7 @@ def wait_for_xcluster_safe_time_to_catchup():
     while True:
         time.sleep(1)
         uninitialized_safe_time, database_safe_time_map = get_xcluster_safe_time_int()
-        print_xcluster_safe_time(database_safe_time_map)
+        log(xcluster_safe_time_str(database_safe_time_map))
         if len(database_safe_time_map) == 0:
             raise_exception("No xcluster_safe_time found")
         if not uninitialized_safe_time:
@@ -825,7 +849,7 @@ def unplanned_failover(args):
     current_time = datetime.datetime.utcnow()
     uninitialized_safe_time, database_safe_time_map = get_xcluster_safe_time_int()
     log(f"Current time(UTC):\t{current_time.strftime('%Y-%m-%d %H:%M:%S.%f')}")
-    print_xcluster_safe_time(database_safe_time_map)
+    log(xcluster_safe_time_str(database_safe_time_map))
     if uninitialized_safe_time:
         raise_exception("UnInitialized xcluster safe time found. Cannot proceed with failover.")
 

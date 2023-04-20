@@ -2,8 +2,10 @@ import datetime
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import re
+import sys
 import urllib3
 urllib3.disable_warnings()
 
@@ -16,10 +18,8 @@ class Color:
     YELLOW = "\033[33m"
     RESET = '\033[0m'
 
-# Define color escape codes
-GREEN = '\033[92m'
-ENDC = '\033[0m'
-
+LINE_UP = '\033[1A'
+LINE_CLEAR = '\x1b[2K'
 
 def log(*values: object):
     log_to_file(*values)
@@ -72,7 +72,7 @@ def run_subprocess_no_log(*command:object):
     if returncode != 0:
         error = sub_process.stderr.readlines()
         raise_exception(f"{error}. Return code: {returncode}")
-    
+
     lines = []
     result = sub_process.stdout.readlines()
     for line in result:
@@ -132,3 +132,7 @@ def get_input(message : str):
     log_to_file(user_input)
     return user_input
 
+process_stopped = False
+def signal_handler(sig, frame):
+    process_stopped = True
+    sys.exit(0)

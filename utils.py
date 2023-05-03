@@ -56,6 +56,8 @@ def run_subprocess_no_log(*command:object):
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE)
 
+    result = []
+    error = []
     waited = False
     while True:
         try:
@@ -65,16 +67,18 @@ def run_subprocess_no_log(*command:object):
         if returncode is not None:
             break
         waited = True
+        result += sub_process.stdout.readlines()
+        error += sub_process.stderr.readlines()
         print(".", end="", flush=True)
     if waited:
         print()
 
     if returncode != 0:
-        error = sub_process.stderr.readlines()
+        error += sub_process.stderr.readlines()
         raise_exception(f"{error}. Return code: {returncode}")
 
     lines = []
-    result = sub_process.stdout.readlines()
+    result += sub_process.stdout.readlines()
     for line in result:
         lines+=[str(line.decode("utf-8")).strip()]
     return lines

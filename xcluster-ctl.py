@@ -300,7 +300,6 @@ def show_config(args):
 
 
 required_common_flags = {
-    "xcluster_consistent_wal=true",
     "enable_pg_savepoints=false",
     "consensus_max_batch_size_bytes=1048576",
     "rpc_throttle_threshold_bytes=524288",
@@ -694,7 +693,7 @@ def setup_replication_with_bootstrap(args):
         bootstrap_databases([databases_str])
 
     copy_certs(primary_config, standby_config, replication_name)
-    result = run_yb_admin(standby_config, f"setup_universe_replication {primary_config.universe_uuid}_{replication_name} {primary_config.master_addresses} {','.join(bootstrap_info.table_ids)} {','.join(bootstrap_info.bootstrap_ids)}")
+    result = run_yb_admin(standby_config, f"setup_universe_replication {primary_config.universe_uuid}_{replication_name} {primary_config.master_addresses} {','.join(bootstrap_info.table_ids)} {','.join(bootstrap_info.bootstrap_ids)} transactional")
     log('\n'.join(result))
 
     create_snapshot_schedule_if_needed(standby_config, bootstrap_info.databses)
@@ -729,7 +728,7 @@ def setup_replication(args):
         raise_exception("No tables found")
 
     copy_certs(primary_config, standby_config, replication_name)
-    result = run_yb_admin(standby_config, f"setup_universe_replication {primary_config.universe_uuid}_{replication_name} {primary_config.master_addresses} {','.join(table_ids)}")
+    result = run_yb_admin(standby_config, f"setup_universe_replication {primary_config.universe_uuid}_{replication_name} {primary_config.master_addresses} {','.join(table_ids)} transactional")
     log('\n'.join(result))
 
     reload_and_set_correct_roles()

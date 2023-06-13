@@ -69,9 +69,9 @@ class UniverseConfig:
         self.tserver_ip_map = [ip.strip() for ip in self.tserver_ips.split(",")]
         self.tserver_web_server_map=[]
         for ip in self.tserver_ip_map:
-            self.tserver_web_server_map+= [f"https://{ip}:7000/"]
+            self.tserver_web_server_map+= [f"https://{ip}:9000/"]
 
-        self.tserver_addresses = ",".join(map('{0}:7100'.format, self.tserver_ip_map))
+        self.tserver_addresses = ",".join(map('{0}:9100'.format, self.tserver_ip_map))
 
 primary_config = UniverseConfig()
 standby_config = UniverseConfig()
@@ -300,7 +300,6 @@ def show_config(args):
 
 
 required_common_flags = {
-    "enable_pg_savepoints=false",
     "consensus_max_batch_size_bytes=1048576",
     "rpc_throttle_threshold_bytes=524288",
     "ysql_num_shards_per_tserver=3",
@@ -308,8 +307,9 @@ required_common_flags = {
     "certs_for_cdc_dir=/home/yugabyte/yugabyte-tls-producer",
     "use_node_to_node_encryption=true",
     # Optional flags
-    # db_block_cache_size_percentage=20,
-    # yb_client_admin_operation_timeout_sec=600,
+    # "db_block_cache_size_percentage=20",
+    # "yb_client_admin_operation_timeout_sec=600",
+    # "log_min_seconds_to_retain=86400",
 }
 
 required_master_flags = required_common_flags.union({
@@ -318,7 +318,10 @@ required_master_flags = required_common_flags.union({
     # "cdc_wal_retention_time_secs=900"
 })
 
-required_tserver_flags = required_common_flags
+required_tserver_flags = required_common_flags.union({
+    "apply_changes_max_send_rate_mbps=100",
+    "get_changes_max_send_rate_mbps=100",
+})
 
 def validate_flags(url : str, ca_cert_path : str, required_flags, universe_name : str):
     set_flags = get_flags(url, ca_cert_path)
@@ -1111,6 +1114,8 @@ def main():
     function_map = {
         "configure": configure,
         "show_config":show_config,
+        "planned_failover" : planned_failover,
+        "unplanned_failover" : unplanned_failover,
         "validate_universes": validate_universes,
         "setup_replication" : setup_replication,
         "setup_replication_with_bootstrap" : setup_replication_with_bootstrap,
@@ -1120,8 +1125,6 @@ def main():
         "set_standby_role" : set_standby_role,
         "set_active_role" : set_active_role,
         "get_xcluster_safe_time" : get_xcluster_safe_time,
-        "planned_failover" : planned_failover,
-        "unplanned_failover" : unplanned_failover,
         "add_tables" : add_tables,
         "remove_tables" : remove_tables,
         "wait_for_replication_drain" : wait_for_replication_drain,
@@ -1139,8 +1142,11 @@ def main():
         "delete_snapshot_schedules" : delete_snapshot_schedules,
     }
 
+    # command_list = '\n\t'.join(function_map)
+    command_list = '\n\t'.join({"configure","show_config","planned_failover","sync_portal"})
+
     usage_str=f"Usage: python3 {sys.argv[0]} <command> [args]\n"\
-                "commands: \n\t"+'\n\t'.join(function_map)+"\n\n" \
+                f"commands: {command_list}\n\n" \
                 "'configure' must be run at least once\n"
 
     if len(sys.argv) < 2:

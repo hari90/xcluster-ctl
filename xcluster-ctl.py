@@ -280,6 +280,7 @@ def configure(args):
 
     copy_certs(primary_config, standby_config, "repl")
     copy_certs(standby_config, primary_config, "repl")
+    log(f"Synching Portal @{portal_config.url}")
     sync_portal(args)
 
     reload_roles(args)
@@ -343,15 +344,20 @@ def validate_universes(args):
     log(Color.GREEN + "Universe validation successful")
 
 def sync_portal(args):
-    log_to_file(f"Synching Poral @{portal_config.url}")
+    log_to_file(f"Synching Portal @{portal_config.url}")
     # curl -k --location --request POST 'https://portal.dev.yugabyte.com/api/v1/customers/11d78d93-1381-4d1d-8393-ba76f47ba7a6/xcluster_configs/sync?targetUniverseUUID=76b9e2c2-8e29-45cf-a6fd-daa7dfe1b993' --header 'X-AUTH-YW-API-TOKEN: 244b3ac7-63bc-47c3-0' --data ''
 
     request_url = f"{portal_config.url}/api/v1/customers/{portal_config.customer_id}/xcluster_configs/sync?targetUniverseUUID={standby_config.universe_uuid}"
     headers = {
     "X-AUTH-YW-API-TOKEN": portal_config.token
     }
+    log_to_file(f"Running: curl -k --location --request POST '{request_url}' --header 'X-AUTH-YW-API-TOKEN: {portal_config.token}' --data ''")
     payload = ""
-    response = requests.request("POST", request_url, headers=headers, data=payload, verify=False)
+    try:
+        response = requests.request("POST", request_url, headers=headers, data=payload, verify=True)
+    except Exception as e:
+        log(Color.RED+f"Failed to sync Portal. {e}")
+        return
 
     if response.status_code == 200:
         log_to_file(response.text)

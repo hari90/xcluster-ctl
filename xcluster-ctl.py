@@ -354,7 +354,7 @@ def sync_portal(args):
     log_to_file(f"Running: curl -k --location --request POST '{request_url}' --header 'X-AUTH-YW-API-TOKEN: {portal_config.token}' --data ''")
     payload = ""
     try:
-        response = requests.request("POST", request_url, headers=headers, data=payload, verify=True)
+        response = requests.request("POST", request_url, headers=headers, data=payload, verify=False)
     except Exception as e:
         log(Color.RED+f"Failed to sync Portal. {e}")
         return

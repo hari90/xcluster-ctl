@@ -833,6 +833,12 @@ def planned_failover(args):
     wait_for_replication_drain_int(replication_info.stream_ids)
     database_safe_time_map = wait_for_xcluster_safe_time_to_catchup()
 
+    # YBA only
+    database_schedules = get_snapshot_info(standby_config)
+    for database_name in database_safe_time_map.keys():
+        if  database_name not in database_schedules:
+            raise_exception(f"Database {database_name} does not have a snapshot schedule. Use YBA to create a snapshot schedule for all databases under replication.")
+
     set_active_role(args)
     delete_replication(args)
     swap_universe_configs(args)
@@ -876,7 +882,7 @@ def unplanned_failover(args):
     delete_replication(args)
     swap_universe_configs(args)
 
-    log(Color.YELLOW+f"\nOnce {standby_config.universe_name} comes back online drop its database and recreate the database schema. Then use YBA to setup replication with backup and restore. After it completes run set_standby_role command\n")
+    log(Color.YELLOW+f"\nOnce {standby_config.universe_name} comes back online drop and recreate its databases, and then use YBA to setup replication from {primary_config.universe_name}.\n")
 
     log(Color.GREEN+f"Successfully failed over from {Color.YELLOW}{standby_config.universe_name}{Color.GREEN} to {Color.YELLOW}{primary_config.universe_name}")
 
@@ -1054,6 +1060,7 @@ def create_snapshot_schedule_int(config: UniverseConfig, database_name):
     log(Color.GREEN+f"Successfully created PITR snapshot schedule for {database_name}")
 
 def create_snapshot_schedule_if_needed(config: UniverseConfig, databases):
+    # Non-YBA only
     database_schedules = get_snapshot_info(config)
     for database_name in databases:
         if  database_name not in database_schedules:

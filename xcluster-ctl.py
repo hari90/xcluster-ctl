@@ -82,6 +82,7 @@ class ReplicationInfo:
     table_count = 0
     role = "ACTIVE"
     paused = False
+    stream_ids = []
 
 def run_yb_admin(config: UniverseConfig, command : str):
     yb_admin_command = f"tserver/bin/yb-admin -master_addresses {config.master_addresses} --certs_dir_name yugabyte-tls-config/ {command}"
@@ -401,20 +402,12 @@ def xcluster_safe_time_str(database_safe_time_map):
 
 def get_xcluster_estimated_data_loss(args):
     log(f"Getting estimated data loss from {standby_config.universe_name}")
-    database_map = get_databases(standby_config)
-    xcluster_safe_time = run_yb_admin(standby_config, "get_xcluster_estimated_data_loss")
-    for line in xcluster_safe_time:
-        value = line.split('":')
-        if len(value) > 1:
-            value = value[1].strip().replace('"','').replace(',','')
-        if 'namespace_id"' in line:
-            if value not in database_map:
-                raise_exception(f"Cannot find database {value} in {standby_config.universe_name}")
-            log(f"\nnamespace_id:\t\t{database_map[value]}")
-        if 'data_loss_sec"' in line:
-            log(f"data_loss_sec:\t\t{value}")
-
-    log("\n"+Color.GREEN+"Successfully got estimated data loss")
+    xcluster_safe_time = run_yb_admin(standby_config, "get_xcluster_safe_time include_lag_and_skew")
+    json_data = json.loads(''.join(xcluster_safe_time))
+    for namespace in json_data:
+        log(f"\nNamespace name:\t\t{namespace['namespace_name']}")
+        log(f"Namespace Id:\t\t{namespace['namespace_id']}")
+        log(f"Estimated data loss:\t{namespace['safe_time_lag_sec']}s")
 
 def get_xcluster_safe_time(args):
     get_replication_info(args)
@@ -497,17 +490,17 @@ def set_active_role(args):
 
     log(Color.GREEN+"Successfully set role to ACTIVE")
 
-def get_cdc_streams():
-    log("Getting replication streams")
-    data = run_yb_admin(primary_config, "list_cdc_streams")
-    stream_ids = []
-    for line in data:
-        if 'stream_id:' in line:
-            stream_id = line.split(':')[-1].strip().strip('"')
-            stream_ids.append(stream_id)
-    log(f"Found {len(stream_ids)} replication streams")
-    log_to_file(stream_ids)
-    return stream_ids
+# def get_cdc_streams():
+#     log("Getting replication streams")
+#     data = run_yb_admin(primary_config, "list_cdc_streams")
+#     stream_ids = []
+#     for line in data:
+#         if 'stream_id:' in line:
+#             stream_id = line.split(':')[-1].strip().strip('"')
+#             stream_ids.append(stream_id)
+#     log(f"Found {len(stream_ids)} replication streams")
+#     log_to_file(stream_ids)
+#     return stream_ids
 
 def is_replication_drain_done(stream_ids):
     result = ''.join(run_yb_admin(primary_config, "wait_for_replication_drain "+','.join(stream_ids)))
@@ -519,11 +512,16 @@ def is_replication_drain_done(stream_ids):
     return done
 
 def wait_for_replication_drain(args):
-    stream_ids = get_cdc_streams()
+    replication_info = get_replication_info_int()
+    if not replication_info.valid:
+        raise_exception("No replication in progress")
+    wait_for_replication_drain_int(replication_info.stream_ids)
+
+def wait_for_replication_drain_int(stream_ids):
     if len(stream_ids) == 0:
         raise_exception("No replication in progress")
 
-    log("Waiting for replication drain...")
+    log(f"Waiting for drain of {len(stream_ids)} replication streams...")
     while not is_replication_drain_done(stream_ids):
         time.sleep(1)
     log(Color.GREEN+"Successfully completed wait for replication drain")
@@ -828,11 +826,11 @@ def planned_failover(args):
     log(f"Found replication group {wrap_color(Color.YELLOW,replication_info.name)} with {wrap_color(Color.YELLOW,replication_info.table_count)} tables")
 
     # In 2.18 this can be replaces with setting primary to STANBY role
-    if not is_input_yes("\n\nHas the workload stopped"):
+    if not is_input_yes("\n\nHas the workload been stopped"):
         log(Color.YELLOW+"Planned failover abandoned")
         return
 
-    wait_for_replication_drain(args)
+    wait_for_replication_drain_int(replication_info.stream_ids)
     database_safe_time_map = wait_for_xcluster_safe_time_to_catchup()
 
     set_active_role(args)
@@ -966,6 +964,8 @@ def extract_consumer_registry(data: str):
     universe_uuid = ""
     replication_info = ReplicationInfo()
     in_consumer_registry = False
+    previous_line_is_stream_map = False
+
     i = 0
     while i < len(lines):
         line = lines[i]
@@ -996,9 +996,20 @@ def extract_consumer_registry(data: str):
             if universe_uuid != primary_config.universe_uuid:
                 raise_exception(f"Expected replication from {primary_config.universe_name} {primary_config.universe_uuid}, but found {universe_uuid}. Rerun 'configure' with the correct Primary and Standby universes")
 
-        if "stream_map" in line:
-            replication_info.table_count+=1
+        if previous_line_is_stream_map:
+            stream_id_pattern = r'key: "(.*)"'
+            match = re.search(stream_id_pattern, line)
+            if match:
+                replication_info.stream_ids.append(match.group(1))
+            else:
+                raise_exception(f"Cannot parse stream key {line}")
 
+        if "stream_map" in line:
+            previous_line_is_stream_map = True
+        else:
+            previous_line_is_stream_map = False
+
+    replication_info.table_count=len(replication_info.stream_ids)
     replication_info.valid = replication_info.name != "" and replication_info.table_count > 0
 
     return replication_info

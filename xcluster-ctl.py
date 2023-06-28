@@ -315,13 +315,14 @@ required_common_flags = {
     "consensus_max_batch_size_bytes=1048576",
     "rpc_throttle_threshold_bytes=524288",
     "ysql_num_shards_per_tserver=3",
-    "certs_for_cdc_dir=/home/yugabyte/yugabyte-tls-producer",
     # Optional flags
     # "db_block_cache_size_percentage=20",
     # "yb_client_admin_operation_timeout_sec=600",
     # "log_min_seconds_to_retain=86400",
-    #"cdc_consumer_handler_thread_pool_size=200",
+    # "cdc_consumer_handler_thread_pool_size=200",
 }
+
+non_yba_common_flags = {"certs_for_cdc_dir=/home/yugabyte/yugabyte-tls-producer"}
 
 required_master_flags = required_common_flags.union({
     "enable_automatic_tablet_splitting=false",
@@ -331,16 +332,21 @@ required_master_flags = required_common_flags.union({
 })
 
 required_tserver_flags = required_common_flags.union({
-    "apply_changes_max_send_rate_mbps=100",
-    "get_changes_max_send_rate_mbps=100",
 })
+
+
 
 def validate_flags(url : str, ca_cert_path : str, required_flags, universe_name : str):
     set_flags = get_flags(url, ca_cert_path)
 
-    for flag in required_flags:
+    reuired_flags_int = required_flags
+    if not yba_config.IsValid():
+        reuired_flags_int.union(non_yba_common_flags)
+
+    for flag in reuired_flags_int:
         if flag not in set_flags:
             raise_exception(f"Required flag {wrap_color(Color.YELLOW, flag)} is not set on {wrap_color(Color.YELLOW, universe_name)} {wrap_color(Color.YELLOW, url)}")
+
 
 def validate_flags_on_universe(config: UniverseConfig):
     log(f"Validating flags on {Color.YELLOW}{config.universe_name}")

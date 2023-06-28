@@ -240,7 +240,7 @@ def get_cluster_config_from_user(cluster_type : str):
         if ssh_port <= 0:
             raise_exception("Invalid port number")
 
-    pem_file = get_input(f"Enter {cluster_type} universe ssh cert file path: ")
+    pem_file = get_input(f"Enter {cluster_type} universe ssh cert file location: ")
     if not os.path.exists(pem_file):
         raise_exception(f"File {pem_file} not found")
 
@@ -275,12 +275,12 @@ def configure(args):
     ssh_port, pem_file = get_cluster_config_from_user("Source")
     init_universe(source_config, master_ips, ssh_port, pem_file)
 
-    master_ips = get_input("\nEnter one Secondary universe master IP: ")
+    master_ips = get_input("\nEnter one Target universe master IP: ")
     ipaddress.ip_address(master_ips)
 
     log(f"\nssh port:\t\t{ssh_port}\nssh cert file path:\t{pem_file}")
-    if not is_input_yes("Do you want to use these settings for the Secondary universe as well"):
-        ssh_port, pem_file = get_cluster_config_from_user("Secondary")
+    if not is_input_yes("Do you want to use these settings for the Target universe as well"):
+        ssh_port, pem_file = get_cluster_config_from_user("Target")
     init_universe(target_config, master_ips, ssh_port, pem_file)
 
     if source_config.universe_uuid == target_config.universe_uuid:
@@ -341,7 +341,7 @@ def validate_flags(url : str, ca_cert_path : str, required_flags, universe_name 
 
     reuired_flags_int = required_flags
     if not yba_config.IsValid():
-        reuired_flags_int.union(non_yba_common_flags)
+       reuired_flags_int = reuired_flags_int.union(non_yba_common_flags)
 
     for flag in reuired_flags_int:
         if flag not in set_flags:

@@ -315,18 +315,18 @@ required_common_flags = {
     "consensus_max_batch_size_bytes=1048576",
     "rpc_throttle_threshold_bytes=524288",
     "ysql_num_shards_per_tserver=3",
-    "cdc_consumer_handler_thread_pool_size=200",
     "certs_for_cdc_dir=/home/yugabyte/yugabyte-tls-producer",
-    "use_node_to_node_encryption=true",
     # Optional flags
     # "db_block_cache_size_percentage=20",
     # "yb_client_admin_operation_timeout_sec=600",
     # "log_min_seconds_to_retain=86400",
+    #"cdc_consumer_handler_thread_pool_size=200",
 }
 
 required_master_flags = required_common_flags.union({
     "enable_automatic_tablet_splitting=false",
     "enable_tablet_split_of_xcluster_replicated_tables=false",
+    # Optional flags
     # "cdc_wal_retention_time_secs=900"
 })
 

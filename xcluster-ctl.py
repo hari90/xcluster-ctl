@@ -76,8 +76,8 @@ class UniverseConfig:
 
         self.tserver_addresses = ",".join(map('{0}:9100'.format, self.tserver_ip_map))
 
-primary_config = UniverseConfig()
-standby_config = UniverseConfig()
+source_config = UniverseConfig()
+target_config = UniverseConfig()
 
 class ReplicationInfo:
     valid = False
@@ -95,8 +95,8 @@ def write_config_file():
     # Serialize objects to JSON
     config_dict = {
         "yba_config": yba_config.__dict__,
-        "primary_config": primary_config.__dict__,
-        "standby_config": standby_config.__dict__,
+        "source_config": source_config.__dict__,
+        "target_config": target_config.__dict__,
         "bootstrap_info": bootstrap_info.__dict__
     }
 
@@ -123,20 +123,20 @@ def read_config_file():
         except json.JSONDecodeError as e:
             return
 
-        # Check if primary_config and standby_config are present in the dictionary
-        if "primary_config" not in config_dict or "standby_config" not in config_dict:
+        # Check if source_config and target_config are present in the dictionary
+        if "source_config" not in config_dict or "target_config" not in config_dict:
             return
 
         yba_config.__dict__ = config_dict["yba_config"]
-        primary_config.__dict__ = config_dict["primary_config"]
-        standby_config.__dict__ = config_dict["standby_config"]
+        source_config.__dict__ = config_dict["source_config"]
+        target_config.__dict__ = config_dict["target_config"]
         bootstrap_info.__dict__ = config_dict["bootstrap_info"]
 
 def is_configured():
-    return primary_config.initialized and standby_config.initialized
+    return source_config.initialized and target_config.initialized
 
 def print_header():
-    log(f"[ {wrap_color(Color.BLUE, primary_config.universe_name)} -> {wrap_color(Color.BLUE, standby_config.universe_name)} ]")
+    log(f"[ {wrap_color(Color.BLUE, source_config.universe_name)} -> {wrap_color(Color.BLUE, target_config.universe_name)} ]")
 
 def validate_ip_csv(ip_str : str):
     """
@@ -269,11 +269,11 @@ def get_yba_config_from_user():
 def configure(args):
     get_yba_config_from_user()
 
-    master_ips = get_input(f"\nEnter one Primary universe master IP: ")
+    master_ips = get_input(f"\nEnter one Source universe master IP: ")
     ipaddress.ip_address(master_ips)
 
-    ssh_port, pem_file = get_cluster_config_from_user("Primary")
-    init_universe(primary_config, master_ips, ssh_port, pem_file)
+    ssh_port, pem_file = get_cluster_config_from_user("Source")
+    init_universe(source_config, master_ips, ssh_port, pem_file)
 
     master_ips = get_input("\nEnter one Secondary universe master IP: ")
     ipaddress.ip_address(master_ips)
@@ -281,13 +281,13 @@ def configure(args):
     log(f"\nssh port:\t\t{ssh_port}\nssh cert file path:\t{pem_file}")
     if not is_input_yes("Do you want to use these settings for the Secondary universe as well"):
         ssh_port, pem_file = get_cluster_config_from_user("Secondary")
-    init_universe(standby_config, master_ips, ssh_port, pem_file)
+    init_universe(target_config, master_ips, ssh_port, pem_file)
 
-    if primary_config.universe_uuid == standby_config.universe_uuid:
+    if source_config.universe_uuid == target_config.universe_uuid:
         raise_exception("Both universes are the same")
 
-    copy_certs(primary_config, standby_config, "repl")
-    copy_certs(standby_config, primary_config, "repl")
+    copy_certs(source_config, target_config, "repl")
+    copy_certs(target_config, source_config, "repl")
     sync_yba(args)
 
     reload_roles(args)
@@ -300,11 +300,11 @@ def show_config(args):
         log("YBA Config:")
         log(Color.YELLOW+str(yba_config))
 
-    log("Primary Universe:")
-    log(Color.YELLOW+str(primary_config))
+    log("Source Universe:")
+    log(Color.YELLOW+str(source_config))
 
-    log("Standby Universe:")
-    log(Color.YELLOW+str(standby_config))
+    log("Target Universe:")
+    log(Color.YELLOW+str(target_config))
 
     if bootstrap_info.initialized:
         log("Bootstrap Info:")
@@ -350,8 +350,8 @@ def validate_flags_on_universe(config: UniverseConfig):
         validate_flags(url, config.ca_cert_path, required_tserver_flags, config.universe_name)
 
 def validate_universes(args):
-    validate_flags_on_universe(primary_config)
-    validate_flags_on_universe(standby_config)
+    validate_flags_on_universe(source_config)
+    validate_flags_on_universe(target_config)
     log(Color.GREEN + "Universe validation successful")
 
 def sync_yba(args):
@@ -361,7 +361,7 @@ def sync_yba(args):
     log_to_file(f"Synching YBA @{yba_config.url}")
     # curl -k --location --request POST 'https://portal.dev.yugabyte.com/api/v1/customers/11d78d93-1381-4d1d-8393-ba76f47ba7a6/xcluster_configs/sync?targetUniverseUUID=76b9e2c2-8e29-45cf-a6fd-daa7dfe1b993' --header 'X-AUTH-YW-API-TOKEN: 244b3ac7-63bc-47c3-0' --data ''
 
-    request_url = f"{yba_config.url}/api/v1/customers/{yba_config.customer_id}/xcluster_configs/sync?targetUniverseUUID={standby_config.universe_uuid}"
+    request_url = f"{yba_config.url}/api/v1/customers/{yba_config.customer_id}/xcluster_configs/sync?targetUniverseUUID={target_config.universe_uuid}"
     headers = {
     "X-AUTH-YW-API-TOKEN": yba_config.token
     }
@@ -383,8 +383,8 @@ def sync_yba(args):
     log(Color.GREEN + "Successfully synced YBA")
 
 def get_xcluster_safe_time_int():
-    database_map = get_databases(standby_config)
-    xcluster_safe_time = run_yb_admin(standby_config, "get_xcluster_safe_time")
+    database_map = get_databases(target_config)
+    xcluster_safe_time = run_yb_admin(target_config, "get_xcluster_safe_time")
     database_safe_time_map={}
     database_name = ""
     uninitialized_safe_time : bool = len(xcluster_safe_time) == 0
@@ -394,7 +394,7 @@ def get_xcluster_safe_time_int():
             value = value[1].strip().replace('"','').replace(',','')
         if 'namespace_id"' in line:
             if value not in database_map:
-                raise_exception(f"Cannot find database {value} in {standby_config.universe_name}")
+                raise_exception(f"Cannot find database {value} in {target_config.universe_name}")
             database_name=database_map[value]
         if 'safe_time"' in line:
             if "2023-" not in value:
@@ -414,8 +414,8 @@ def xcluster_safe_time_str(database_safe_time_map):
     return '\n'.join(lines)
 
 def get_xcluster_estimated_data_loss(args):
-    log(f"Getting estimated data loss from {standby_config.universe_name}")
-    xcluster_safe_time = run_yb_admin(standby_config, "get_xcluster_safe_time include_lag_and_skew")
+    log(f"Getting estimated data loss from {target_config.universe_name}")
+    xcluster_safe_time = run_yb_admin(target_config, "get_xcluster_safe_time include_lag_and_skew")
     json_data = json.loads(''.join(xcluster_safe_time))
     for namespace in json_data:
         log(f"\nNamespace name:\t\t{namespace['namespace_name']}")
@@ -471,40 +471,40 @@ def is_standy_role(config: UniverseConfig):
 
 def set_role_int(config: UniverseConfig, role: str):
     run_yb_admin(config, f"change_xcluster_role {role}")
-    standby_config.role = role
+    target_config.role = role
     write_config_file()
     # Wait for async processing
     time.sleep(2)
 
 def set_standby_role(args):
-    log(f"Setting {standby_config.universe_name} to STANDBY")
-    reload_universe_roles(standby_config)
-    if standby_config.role == "STANDBY":
+    log(f"Setting {target_config.universe_name} to STANDBY")
+    reload_universe_roles(target_config)
+    if target_config.role == "STANDBY":
         log(Color.GREEN+"Already in STANDBY role")
         return
 
-    set_role_int(standby_config, "STANDBY")
+    set_role_int(target_config, "STANDBY")
 
     log(Color.GREEN+"Successfully set role to STANDBY")
 
     database_safe_time_map = wait_for_xcluster_safe_time_to_catchup()
-    create_snapshot_schedule_if_needed(standby_config, database_safe_time_map.keys())
+    create_snapshot_schedule_if_needed(target_config, database_safe_time_map.keys())
 
 def set_active_role(args):
-    log(f"Setting {standby_config.universe_name} to ACTIVE")
-    reload_universe_roles(standby_config)
+    log(f"Setting {target_config.universe_name} to ACTIVE")
+    reload_universe_roles(target_config)
 
-    if standby_config.role == "ACTIVE":
+    if target_config.role == "ACTIVE":
         log(Color.GREEN+"Already in ACTIVE role")
         return
 
-    set_role_int(standby_config, "ACTIVE")
+    set_role_int(target_config, "ACTIVE")
 
     log(Color.GREEN+"Successfully set role to ACTIVE")
 
 # def get_cdc_streams():
 #     log("Getting replication streams")
-#     data = run_yb_admin(primary_config, "list_cdc_streams")
+#     data = run_yb_admin(source_config, "list_cdc_streams")
 #     stream_ids = []
 #     for line in data:
 #         if 'stream_id:' in line:
@@ -515,7 +515,7 @@ def set_active_role(args):
 #     return stream_ids
 
 def is_replication_drain_done(stream_ids):
-    result = ''.join(run_yb_admin(primary_config, "wait_for_replication_drain "+','.join(stream_ids)))
+    result = ''.join(run_yb_admin(source_config, "wait_for_replication_drain "+','.join(stream_ids)))
     done = "undrained" not in result
     if not done:
         log(Color.YELLOW+result)
@@ -538,10 +538,10 @@ def wait_for_replication_drain_int(stream_ids):
         time.sleep(1)
     log(Color.GREEN+"Successfully completed wait for replication drain")
 
-def get_primary_tables_map(databases):
-    log(f"Getting tables for database(s) {wrap_color(Color.YELLOW, ','.join(databases))} from {wrap_color(Color.YELLOW, primary_config.universe_name)}")
+def get_source_tables_map(databases):
+    log(f"Getting tables for database(s) {wrap_color(Color.YELLOW, ','.join(databases))} from {wrap_color(Color.YELLOW, source_config.universe_name)}")
     table_ids = {}
-    result = run_yb_admin(primary_config, f"list_tables include_table_id include_table_type")
+    result = run_yb_admin(source_config, f"list_tables include_table_id include_table_type")
     for table_info in result:
         match = False
         for database in databases:
@@ -558,13 +558,13 @@ def get_primary_tables_map(databases):
     return table_ids
 
 def delete_cdc_streams(stream_id):
-    result = run_yb_admin(primary_config, f"delete_cdc_stream {stream_id} force_delete")
+    result = run_yb_admin(source_config, f"delete_cdc_stream {stream_id} force_delete")
     log_to_file(result)
 
 def bootstrap_tables_int(table_ids):
     log(f"Checkpointing {len(table_ids)} tables")
 
-    result = run_yb_admin(primary_config, "bootstrap_cdc_producer "+','.join(table_ids))
+    result = run_yb_admin(source_config, "bootstrap_cdc_producer "+','.join(table_ids))
     bootstrap_ids = []
     for line in result:
         bootstrap_ids.append(line.split(':')[-1].strip())
@@ -582,7 +582,7 @@ def bootstrap_databases(args):
 
     databases = databases_str.split(',')
 
-    table_ids = get_primary_tables_map(databases).values()
+    table_ids = get_source_tables_map(databases).values()
 
     if len(table_ids) == 0:
         raise_exception("No tables found")
@@ -614,7 +614,7 @@ def bootstrap_tables(args):
         database  = args[0]
         table_str = args[1]
 
-    table_map = get_primary_tables_map([database])
+    table_map = get_source_tables_map([database])
 
     table_ids = []
 
@@ -645,7 +645,7 @@ def add_tables_with_bootstrap(args):
 
     log(f"Adding {len(bootstrap_info.table_ids)} tables from {','.join(bootstrap_info.databses)} to add to replication group {replication_info.name}")
 
-    result = run_yb_admin(standby_config, f"alter_universe_replication {primary_config.universe_uuid}_{replication_info.name} add_table {','.join(bootstrap_info.table_ids)} {','.join(bootstrap_info.bootstrap_ids)}")
+    result = run_yb_admin(target_config, f"alter_universe_replication {source_config.universe_uuid}_{replication_info.name} add_table {','.join(bootstrap_info.table_ids)} {','.join(bootstrap_info.bootstrap_ids)}")
     log('\n'.join(result))
 
     clear_bootstrap_from_config()
@@ -689,16 +689,16 @@ def ensure_no_replication_in_progress():
 
 def reload_and_set_correct_roles():
     reload_roles_int()
-    if primary_config.role == "STANDBY":
-        log(f"Setting {primary_config.universe_name} role to ACTIVE")
-        set_role_int(primary_config, "ACTIVE")
-    if standby_config.role != "STANDBY":
-        set_role_int(standby_config, "STANDBY")
-        log(f"Setting {standby_config.universe_name} role to STANDBY")
+    if source_config.role == "STANDBY":
+        log(f"Setting {source_config.universe_name} role to ACTIVE")
+        set_role_int(source_config, "ACTIVE")
+    if target_config.role != "STANDBY":
+        set_role_int(target_config, "STANDBY")
+        log(f"Setting {target_config.universe_name} role to STANDBY")
 
 def setup_replication_with_bootstrap(args):
     ensure_no_replication_in_progress()
-    log(f"Setting up replication from {primary_config.universe_name} to {standby_config.universe_name} with bootstrap")
+    log(f"Setting up replication from {source_config.universe_name} to {target_config.universe_name} with bootstrap")
 
     if len(args) != 2:
         replication_name = get_input("Please provide a replication name: ")
@@ -710,11 +710,11 @@ def setup_replication_with_bootstrap(args):
     if not bootstrap_info.initialized:
         bootstrap_databases([databases_str])
 
-    copy_certs(primary_config, standby_config, replication_name)
-    result = run_yb_admin(standby_config, f"setup_universe_replication {primary_config.universe_uuid}_{replication_name} {primary_config.master_addresses} {','.join(bootstrap_info.table_ids)} {','.join(bootstrap_info.bootstrap_ids)} transactional")
+    copy_certs(source_config, target_config, replication_name)
+    result = run_yb_admin(target_config, f"setup_universe_replication {source_config.universe_uuid}_{replication_name} {source_config.master_addresses} {','.join(bootstrap_info.table_ids)} {','.join(bootstrap_info.bootstrap_ids)} transactional")
     log('\n'.join(result))
 
-    create_snapshot_schedule_if_needed(standby_config, bootstrap_info.databses)
+    create_snapshot_schedule_if_needed(target_config, bootstrap_info.databses)
     clear_bootstrap_from_config()
     reload_and_set_correct_roles()
     sync_yba(args)
@@ -727,7 +727,7 @@ def setup_replication(args):
         raise_exception("There is already an available bootstrap. Run setup_replication_with_bootstrap command")
     ensure_no_replication_in_progress()
 
-    log(f"Setting up replication from {primary_config.universe_name} to {standby_config.universe_name} without bootstrap")
+    log(f"Setting up replication from {source_config.universe_name} to {target_config.universe_name} without bootstrap")
 
     if len(args) != 2:
         replication_name = get_input("Please provide a replication name: ")
@@ -737,15 +737,15 @@ def setup_replication(args):
         databases_str = args[1]
 
     databases = databases_str.split(',')
-    create_snapshot_schedule_if_needed(standby_config, databases)
+    create_snapshot_schedule_if_needed(target_config, databases)
 
-    table_ids = get_primary_tables_map(databases).values()
+    table_ids = get_source_tables_map(databases).values()
 
     if len(table_ids) == 0:
         raise_exception("No tables found")
 
-    copy_certs(primary_config, standby_config, replication_name)
-    result = run_yb_admin(standby_config, f"setup_universe_replication {primary_config.universe_uuid}_{replication_name} {primary_config.master_addresses} {','.join(table_ids)} transactional")
+    copy_certs(source_config, target_config, replication_name)
+    result = run_yb_admin(target_config, f"setup_universe_replication {source_config.universe_uuid}_{replication_name} {source_config.master_addresses} {','.join(table_ids)} transactional")
     log('\n'.join(result))
 
     reload_and_set_correct_roles()
@@ -761,8 +761,8 @@ def delete_replication(args):
     if not replication_info.valid:
         raise_exception("No replication in progress")
 
-    log(f"Deleting replication {wrap_color(Color.YELLOW,replication_info.name)} from {wrap_color(Color.YELLOW,primary_config.universe_name)} to {wrap_color(Color.YELLOW,standby_config.universe_name)}")
-    result = run_yb_admin(standby_config, f"delete_universe_replication {primary_config.universe_uuid}_{replication_info.name}")
+    log(f"Deleting replication {wrap_color(Color.YELLOW,replication_info.name)} from {wrap_color(Color.YELLOW,source_config.universe_name)} to {wrap_color(Color.YELLOW,target_config.universe_name)}")
+    result = run_yb_admin(target_config, f"delete_universe_replication {source_config.universe_uuid}_{replication_info.name}")
     log('\n'.join(result))
     set_active_role(args)
     sync_yba(args)
@@ -773,8 +773,8 @@ def pause_replication(args):
     if not replication_info.valid:
         raise_exception("No replication in progress")
 
-    log(f"Pausing replication {replication_info.name} from {primary_config.universe_name} to {standby_config.universe_name}")
-    result = run_yb_admin(standby_config, f"set_universe_replication_enabled {primary_config.universe_uuid}_{replication_info.name} 0")
+    log(f"Pausing replication {replication_info.name} from {source_config.universe_name} to {target_config.universe_name}")
+    result = run_yb_admin(target_config, f"set_universe_replication_enabled {source_config.universe_uuid}_{replication_info.name} 0")
     log('\n'.join(result))
     log(Color.GREEN+"Successfully paused replication")
     sync_yba(args)
@@ -783,18 +783,18 @@ def resume_replication(args):
     replication_info = get_replication_info_int()
     if not replication_info.valid:
         raise_exception("No replication in progress")
-    log(f"Resuming replication {replication_info.name} from {primary_config.universe_name} to {standby_config.universe_name}")
-    result = run_yb_admin(standby_config, f"set_universe_replication_enabled {primary_config.universe_uuid}_{replication_info.name} 1")
+    log(f"Resuming replication {replication_info.name} from {source_config.universe_name} to {target_config.universe_name}")
+    result = run_yb_admin(target_config, f"set_universe_replication_enabled {source_config.universe_uuid}_{replication_info.name} 1")
     log('\n'.join(result))
     log(Color.GREEN+"Successfully resumed replication")
     sync_yba(args)
 
 def swap_universe_configs(args):
-    log(f"Swapping Primary and Standby universes")
-    global standby_config, primary_config
-    temp = standby_config
-    standby_config = primary_config
-    primary_config = temp
+    log(f"Swapping Source and Target universes")
+    global target_config, source_config
+    temp = target_config
+    target_config = source_config
+    source_config = temp
 
     write_config_file()
     print_header()
@@ -828,7 +828,7 @@ def get_databases(config: UniverseConfig):
     return database_map
 
 def planned_failover(args):
-    log(f"Performing a planned failover from {primary_config.universe_name} to {standby_config.universe_name}")
+    log(f"Performing a planned failover from {source_config.universe_name} to {target_config.universe_name}")
     replication_info = get_replication_info_int()
     if not replication_info.valid:
         raise_exception("No replication in progress")
@@ -843,7 +843,7 @@ def planned_failover(args):
     database_safe_time_map = wait_for_xcluster_safe_time_to_catchup()
 
     if yba_config.IsValid():
-        database_schedules = get_snapshot_info(standby_config)
+        database_schedules = get_snapshot_info(target_config)
         for database_name in database_safe_time_map.keys():
             if  database_name not in database_schedules:
                 raise_exception(f"Database {database_name} does not have a snapshot schedule. Use YBA to create a snapshot schedule for all databases under replication.")
@@ -853,10 +853,10 @@ def planned_failover(args):
     swap_universe_configs(args)
     setup_replication_with_bootstrap([replication_info.name, ','.join(database_safe_time_map.keys())])
 
-    log(Color.GREEN+f"Successfully failed over from {Color.YELLOW}{standby_config.universe_name}{Color.GREEN} to {Color.YELLOW}{primary_config.universe_name}")
+    log(Color.GREEN+f"Successfully failed over from {Color.YELLOW}{target_config.universe_name}{Color.GREEN} to {Color.YELLOW}{source_config.universe_name}")
 
 def unplanned_failover(args):
-    log(f"Performing a unplanned failover from {primary_config.universe_name} to {standby_config.universe_name}")
+    log(f"Performing a unplanned failover from {source_config.universe_name} to {target_config.universe_name}")
     replication_info = get_replication_info_int()
     if not replication_info.valid:
         raise_exception("No replication in progress")
@@ -875,25 +875,25 @@ def unplanned_failover(args):
     if uninitialized_safe_time:
         raise_exception("UnInitialized xcluster safe time found. Cannot proceed with failover.")
 
-    if not is_input_yes(f"Any data written to the {primary_config.universe_name} after these times will be lost. Are you sure you want to proceed"):
+    if not is_input_yes(f"Any data written to the {source_config.universe_name} after these times will be lost. Are you sure you want to proceed"):
         log(Color.YELLOW+"Planned failover abandoned")
         return
 
-    snapshot_info = get_snapshot_info(standby_config)
+    snapshot_info = get_snapshot_info(target_config)
 
     log("Restoring databases to xcluster safe time")
     for database in database_safe_time_map.keys():
         if database not in snapshot_info:
             raise_exception(f"Snapshot not found for database {database}. Aborting failover")
-        restore_to_point_in_time(standby_config, database, snapshot_info[database][0], database_safe_time_map[database])
+        restore_to_point_in_time(target_config, database, snapshot_info[database][0], database_safe_time_map[database])
 
     set_active_role(args)
     delete_replication(args)
     swap_universe_configs(args)
 
-    log(Color.YELLOW+f"\nOnce {standby_config.universe_name} comes back online drop and recreate its databases, and then use YBA to setup replication from {primary_config.universe_name}.\n")
+    log(Color.YELLOW+f"\nOnce {target_config.universe_name} comes back online drop and recreate its databases, and then use YBA to setup replication from {source_config.universe_name}.\n")
 
-    log(Color.GREEN+f"Successfully failed over from {Color.YELLOW}{standby_config.universe_name}{Color.GREEN} to {Color.YELLOW}{primary_config.universe_name}")
+    log(Color.GREEN+f"Successfully failed over from {Color.YELLOW}{target_config.universe_name}{Color.GREEN} to {Color.YELLOW}{source_config.universe_name}")
 
 def reload_universe_roles(config: UniverseConfig):
     if is_standy_role(config):
@@ -902,8 +902,8 @@ def reload_universe_roles(config: UniverseConfig):
         config.role = "ACTIVE"
 
 def reload_roles_int():
-    reload_universe_roles(primary_config)
-    reload_universe_roles(standby_config)
+    reload_universe_roles(source_config)
+    reload_universe_roles(target_config)
 
     write_config_file()
 
@@ -925,7 +925,7 @@ def add_tables(args):
         database  = args[0]
         table_str = args[1]
 
-    table_map = get_primary_tables_map([database])
+    table_map = get_source_tables_map([database])
 
     table_ids = []
 
@@ -936,7 +936,7 @@ def add_tables(args):
             raise_exception(f"Table {table} not found in {database}")
         table_ids += [table_map[db_table]]
 
-    result = run_yb_admin(standby_config, f"alter_universe_replication {primary_config.universe_uuid}_{replication_info.name} add_table {','.join(table_ids)}")
+    result = run_yb_admin(target_config, f"alter_universe_replication {source_config.universe_uuid}_{replication_info.name} add_table {','.join(table_ids)}")
     log('\n'.join(result))
     sync_yba(args)
 
@@ -957,7 +957,7 @@ def remove_tables(args):
         database  = args[0]
         table_str = args[1]
 
-    table_map = get_primary_tables_map([database])
+    table_map = get_source_tables_map([database])
 
     table_ids = []
 
@@ -968,7 +968,7 @@ def remove_tables(args):
             raise_exception(f"Table {table} not found in {database}")
         table_ids += [table_map[db_table]]
 
-    log(run_yb_admin(standby_config, f"alter_universe_replication {primary_config.universe_uuid}_{replication_info.name} remove_table {','.join(table_ids)}"))
+    log(run_yb_admin(target_config, f"alter_universe_replication {source_config.universe_uuid}_{replication_info.name} remove_table {','.join(table_ids)}"))
     sync_yba(args)
 
     wait_for_xcluster_safe_time_to_catchup()
@@ -1008,8 +1008,8 @@ def extract_consumer_registry(data: str):
                 replication_info.name = match.group(2)
             else:
                 raise_exception(f"Cannot parse replication key {line}")
-            if universe_uuid != primary_config.universe_uuid:
-                raise_exception(f"Expected replication from {primary_config.universe_name} {primary_config.universe_uuid}, but found {universe_uuid}. Rerun 'configure' with the correct Primary and Standby universes")
+            if universe_uuid != source_config.universe_uuid:
+                raise_exception(f"Expected replication from {source_config.universe_name} {source_config.universe_uuid}, but found {universe_uuid}. Rerun 'configure' with the correct Source and Target universes")
 
         if previous_line_is_stream_map:
             stream_id_pattern = r'key: "(.*)"'
@@ -1030,7 +1030,7 @@ def extract_consumer_registry(data: str):
     return replication_info
 
 def get_replication_info_int():
-    result = http_get(f"{standby_config.master_web_server_map[0]}xcluster-config", standby_config.ca_cert_path)
+    result = http_get(f"{target_config.master_web_server_map[0]}xcluster-config", target_config.ca_cert_path)
     return extract_consumer_registry(result)
 
 def get_replication_info(args):
@@ -1047,7 +1047,7 @@ def get_replication_info(args):
         log(Color.YELLOW+"Replication is paused")
 
     if replication_info.role != "STANDBY":
-        log(f"{Color.RED}STANDBY role has not been set on {Color.RESET}{standby_config.universe_name}{Color.RED}. Please run set_standby_role command")
+        log(f"{Color.RED}STANDBY role has not been set on {Color.RESET}{target_config.universe_name}{Color.RED}. Please run set_standby_role command")
 
 def get_snapshot_info(config: UniverseConfig):
     result = run_yb_admin(config, "list_snapshot_schedules")
@@ -1083,27 +1083,27 @@ def list_snapshot_schedules_for_iniverse(config: UniverseConfig):
         log(f"Database: {database}, Schedule_id(s): {database_snapshots[database]}")
 
 def list_snapshot_schedules(args):
-    list_snapshot_schedules_for_iniverse(primary_config)
-    list_snapshot_schedules_for_iniverse(standby_config)
+    list_snapshot_schedules_for_iniverse(source_config)
+    list_snapshot_schedules_for_iniverse(target_config)
     log(Color.GREEN+"Successfully listed snapshot schedules")
 
 def create_snapshot_schedules(args):
-    log(f"Creating snapshot schedules on {standby_config.universe_name}")
+    log(f"Creating snapshot schedules on {target_config.universe_name}")
     if len(args) != 1:
         databases_str = get_input("Please provide a CSV list of database names to bootstrap: ")
     else:
         databases_str = args[0]
 
     databases = databases_str.split(',')
-    database_snapshots = get_snapshot_info(standby_config)
+    database_snapshots = get_snapshot_info(target_config)
     for database in databases:
         if database in database_snapshots:
             log(f"Database {database} already has a snapshot schedule {database_snapshots[database]}. Skipping")
             continue
-        create_snapshot_schedule_int(standby_config, database)
+        create_snapshot_schedule_int(target_config, database)
 
 def delete_snapshot_schedules(args):
-    log(f"Deleting snapshot schedules on {standby_config.universe_name}")
+    log(f"Deleting snapshot schedules on {target_config.universe_name}")
 
     if len(args) != 1:
         databases_str = get_input("Please provide a CSV list of database names to bootstrap: ")
@@ -1112,16 +1112,16 @@ def delete_snapshot_schedules(args):
 
     databases = databases_str.split(',')
 
-    database_snapshots = get_snapshot_info(standby_config)
+    database_snapshots = get_snapshot_info(target_config)
     for database in databases:
         if database in database_snapshots:
             for schedule_id in database_snapshots[database]:
                 log(f"Deleting snapshot schedule {wrap_color(Color.YELLOW, schedule_id)} for Database {wrap_color(Color.YELLOW, database)}")
-                log(''.join(run_yb_admin(standby_config, f"delete_snapshot_schedule {schedule_id}")))
+                log(''.join(run_yb_admin(target_config, f"delete_snapshot_schedule {schedule_id}")))
 
     log("Waiting for the delete to complete")
     while True:
-        database_snapshots = get_snapshot_info(standby_config)
+        database_snapshots = get_snapshot_info(target_config)
         for database in databases:
             if database in database_snapshots:
                 print(".", end="", flush=True)

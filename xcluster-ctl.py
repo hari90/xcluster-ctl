@@ -10,7 +10,7 @@ from utils import *
 config_file = "config.json"
 ca_file = "ca.crt"
 
-class PortalConfig:
+class YBAConfig:
     url = ""
     customer_id = ""
     token = ""
@@ -18,7 +18,10 @@ class PortalConfig:
     def __str__(self):
         return "{'url': '" + self.url + "', 'customer_id': '" + self.customer_id + "', 'token': '" + self.token + "'}"
 
-portal_config = PortalConfig()
+    def IsValid(self):
+        return len(self.url) > 0
+
+yba_config = YBAConfig()
 
 class BootstrapInfo:
     initialized = False
@@ -91,7 +94,7 @@ def run_yb_admin(config: UniverseConfig, command : str):
 def write_config_file():
     # Serialize objects to JSON
     config_dict = {
-        "portal_config": portal_config.__dict__,
+        "yba_config": yba_config.__dict__,
         "primary_config": primary_config.__dict__,
         "standby_config": standby_config.__dict__,
         "bootstrap_info": bootstrap_info.__dict__
@@ -124,7 +127,7 @@ def read_config_file():
         if "primary_config" not in config_dict or "standby_config" not in config_dict:
             return
 
-        portal_config.__dict__ = config_dict["portal_config"]
+        yba_config.__dict__ = config_dict["yba_config"]
         primary_config.__dict__ = config_dict["primary_config"]
         standby_config.__dict__ = config_dict["standby_config"]
         bootstrap_info.__dict__ = config_dict["bootstrap_info"]
@@ -243,24 +246,28 @@ def get_cluster_config_from_user(cluster_type : str):
 
     return ssh_port, pem_file
 
-def configure(args):
-    full_url = get_input("Enter the portal url: ")
+def get_yba_config_from_user():
+    if not is_input_yes("Are these universe managed by YBA"):
+        return
+    full_url = get_input("Enter the YBA url: ")
     url_parts = urlsplit(full_url)
-    portal_config.url = urlunsplit((url_parts.scheme, url_parts.netloc, '', '', ''))
-    if len(portal_config.url) == 0:
-        raise_exception("Portal url cannot be empty")
+    yba_config.url = urlunsplit((url_parts.scheme, url_parts.netloc, '', '', ''))
+    if len(yba_config.url) == 0:
+        raise_exception("YBA url cannot be empty")
 
-    # log(http_get(f"{portal_config.url}/profile", False))
-    log(f"Get the Customer ID and API Token from {Color.YELLOW}{portal_config.url}/profile")
-    portal_config.customer_id = get_input("Enter the customer id: ")
-    if portal_config.customer_id.strip() == "":
+    log(f"Get the Customer ID and API Token from {Color.YELLOW}{yba_config.url}/profile")
+    yba_config.customer_id = get_input("Enter the customer id: ")
+    if yba_config.customer_id.strip() == "":
         raise_exception("Customer id cannot be empty")
-    validate_guid(portal_config.customer_id)
+    validate_guid(yba_config.customer_id)
 
-    portal_config.token = get_input("Enter the auth token: ")
-    if portal_config.token.strip() == "":
+    yba_config.token = get_input("Enter the auth token: ")
+    if yba_config.token.strip() == "":
         raise_exception("Auth token cannot be empty")
-    validate_guid(portal_config.token)
+    validate_guid(yba_config.token)
+
+def configure(args):
+    get_yba_config_from_user()
 
     master_ips = get_input(f"\nEnter one Primary universe master IP: ")
     ipaddress.ip_address(master_ips)
@@ -272,8 +279,8 @@ def configure(args):
     ipaddress.ip_address(master_ips)
 
     log(f"\nssh port:\t\t{ssh_port}\nssh cert file path:\t{pem_file}")
-    if not is_input_yes("Do you want to use these settings for the Seconday universe as well"):
-        ssh_port, pem_file = get_cluster_config_from_user("Seconday")
+    if not is_input_yes("Do you want to use these settings for the Secondary universe as well"):
+        ssh_port, pem_file = get_cluster_config_from_user("Secondary")
     init_universe(standby_config, master_ips, ssh_port, pem_file)
 
     if primary_config.universe_uuid == standby_config.universe_uuid:
@@ -281,8 +288,7 @@ def configure(args):
 
     copy_certs(primary_config, standby_config, "repl")
     copy_certs(standby_config, primary_config, "repl")
-    log(f"Synching Portal @{portal_config.url}")
-    sync_portal(args)
+    sync_yba(args)
 
     reload_roles(args)
 
@@ -290,12 +296,16 @@ def configure(args):
     validate_universes([])
 
 def show_config(args):
-    log("Portal Config:")
-    log(Color.YELLOW+str(portal_config))
+    if yba_config.IsValid():
+        log("YBA Config:")
+        log(Color.YELLOW+str(yba_config))
+
     log("Primary Universe:")
     log(Color.YELLOW+str(primary_config))
+
     log("Standby Universe:")
     log(Color.YELLOW+str(standby_config))
+
     if bootstrap_info.initialized:
         log("Bootstrap Info:")
         log(Color.YELLOW+str(bootstrap_info))
@@ -344,30 +354,33 @@ def validate_universes(args):
     validate_flags_on_universe(standby_config)
     log(Color.GREEN + "Universe validation successful")
 
-def sync_portal(args):
-    log_to_file(f"Synching Portal @{portal_config.url}")
+def sync_yba(args):
+    if not yba_config.IsValid():
+        return
+
+    log_to_file(f"Synching YBA @{yba_config.url}")
     # curl -k --location --request POST 'https://portal.dev.yugabyte.com/api/v1/customers/11d78d93-1381-4d1d-8393-ba76f47ba7a6/xcluster_configs/sync?targetUniverseUUID=76b9e2c2-8e29-45cf-a6fd-daa7dfe1b993' --header 'X-AUTH-YW-API-TOKEN: 244b3ac7-63bc-47c3-0' --data ''
 
-    request_url = f"{portal_config.url}/api/v1/customers/{portal_config.customer_id}/xcluster_configs/sync?targetUniverseUUID={standby_config.universe_uuid}"
+    request_url = f"{yba_config.url}/api/v1/customers/{yba_config.customer_id}/xcluster_configs/sync?targetUniverseUUID={standby_config.universe_uuid}"
     headers = {
-    "X-AUTH-YW-API-TOKEN": portal_config.token
+    "X-AUTH-YW-API-TOKEN": yba_config.token
     }
-    log_to_file(f"Running: curl -k --location --request POST '{request_url}' --header 'X-AUTH-YW-API-TOKEN: {portal_config.token}' --data ''")
+    log_to_file(f"Running: curl -k --location --request POST '{request_url}' --header 'X-AUTH-YW-API-TOKEN: {yba_config.token}' --data ''")
     payload = ""
     try:
         response = requests.request("POST", request_url, headers=headers, data=payload, verify=False)
     except Exception as e:
-        log(Color.RED+f"Failed to sync Portal. {e}")
+        log(Color.RED+f"Failed to sync YBA. {e}")
         return
 
     if response.status_code == 200:
         log_to_file(response.text)
     else:
         log_to_file(response.status_code, request_url, headers)
-        log(Color.RED+f"Failed to sync Portal. Status code:{response.status_code}. The API token may have expired. Please update the token in config.json and re-run sync_portal command.")
+        log(Color.RED+f"Failed to sync YBA. Status code:{response.status_code}. The API token may have expired. Please update the token in config.json and re-run sync_yba command.")
         return
 
-    log(Color.GREEN + "Successfully synced Portal")
+    log(Color.GREEN + "Successfully synced YBA")
 
 def get_xcluster_safe_time_int():
     database_map = get_databases(standby_config)
@@ -476,7 +489,6 @@ def set_standby_role(args):
 
     database_safe_time_map = wait_for_xcluster_safe_time_to_catchup()
     create_snapshot_schedule_if_needed(standby_config, database_safe_time_map.keys())
-    create_snapshot_schedule_if_needed(primary_config, database_safe_time_map.keys())
 
 def set_active_role(args):
     log(f"Setting {standby_config.universe_name} to ACTIVE")
@@ -570,7 +582,6 @@ def bootstrap_databases(args):
 
     databases = databases_str.split(',')
 
-    create_snapshot_schedule_if_needed(primary_config, databases)
     table_ids = get_primary_tables_map(databases).values()
 
     if len(table_ids) == 0:
@@ -638,7 +649,7 @@ def add_tables_with_bootstrap(args):
     log('\n'.join(result))
 
     clear_bootstrap_from_config()
-    sync_portal(args)
+    sync_yba(args)
     wait_for_xcluster_safe_time_to_catchup()
 
     log(Color.GREEN+"Successfully added tables to replication")
@@ -706,7 +717,7 @@ def setup_replication_with_bootstrap(args):
     create_snapshot_schedule_if_needed(standby_config, bootstrap_info.databses)
     clear_bootstrap_from_config()
     reload_and_set_correct_roles()
-    sync_portal(args)
+    sync_yba(args)
     wait_for_xcluster_safe_time_to_catchup()
 
     log(Color.GREEN+"Successfully setup replication")
@@ -726,7 +737,6 @@ def setup_replication(args):
         databases_str = args[1]
 
     databases = databases_str.split(',')
-    create_snapshot_schedule_if_needed(primary_config, databases)
     create_snapshot_schedule_if_needed(standby_config, databases)
 
     table_ids = get_primary_tables_map(databases).values()
@@ -740,7 +750,7 @@ def setup_replication(args):
 
     reload_and_set_correct_roles()
 
-    sync_portal(args)
+    sync_yba(args)
     wait_for_xcluster_safe_time_to_catchup()
 
     log(Color.GREEN+"Successfully setup replication")
@@ -755,7 +765,7 @@ def delete_replication(args):
     result = run_yb_admin(standby_config, f"delete_universe_replication {primary_config.universe_uuid}_{replication_info.name}")
     log('\n'.join(result))
     set_active_role(args)
-    sync_portal(args)
+    sync_yba(args)
     log(Color.GREEN+"Successfully deleted replication")
 
 def pause_replication(args):
@@ -767,7 +777,7 @@ def pause_replication(args):
     result = run_yb_admin(standby_config, f"set_universe_replication_enabled {primary_config.universe_uuid}_{replication_info.name} 0")
     log('\n'.join(result))
     log(Color.GREEN+"Successfully paused replication")
-    sync_portal(args)
+    sync_yba(args)
 
 def resume_replication(args):
     replication_info = get_replication_info_int()
@@ -777,7 +787,7 @@ def resume_replication(args):
     result = run_yb_admin(standby_config, f"set_universe_replication_enabled {primary_config.universe_uuid}_{replication_info.name} 1")
     log('\n'.join(result))
     log(Color.GREEN+"Successfully resumed replication")
-    sync_portal(args)
+    sync_yba(args)
 
 def swap_universe_configs(args):
     log(f"Swapping Primary and Standby universes")
@@ -825,7 +835,6 @@ def planned_failover(args):
 
     log(f"Found replication group {wrap_color(Color.YELLOW,replication_info.name)} with {wrap_color(Color.YELLOW,replication_info.table_count)} tables")
 
-    # In 2.18 this can be replaces with setting primary to STANBY role
     if not is_input_yes("\n\nHas the workload been stopped"):
         log(Color.YELLOW+"Planned failover abandoned")
         return
@@ -833,11 +842,11 @@ def planned_failover(args):
     wait_for_replication_drain_int(replication_info.stream_ids)
     database_safe_time_map = wait_for_xcluster_safe_time_to_catchup()
 
-    # YBA only
-    database_schedules = get_snapshot_info(standby_config)
-    for database_name in database_safe_time_map.keys():
-        if  database_name not in database_schedules:
-            raise_exception(f"Database {database_name} does not have a snapshot schedule. Use YBA to create a snapshot schedule for all databases under replication.")
+    if yba_config.IsValid():
+        database_schedules = get_snapshot_info(standby_config)
+        for database_name in database_safe_time_map.keys():
+            if  database_name not in database_schedules:
+                raise_exception(f"Database {database_name} does not have a snapshot schedule. Use YBA to create a snapshot schedule for all databases under replication.")
 
     set_active_role(args)
     delete_replication(args)
@@ -929,7 +938,7 @@ def add_tables(args):
 
     result = run_yb_admin(standby_config, f"alter_universe_replication {primary_config.universe_uuid}_{replication_info.name} add_table {','.join(table_ids)}")
     log('\n'.join(result))
-    sync_portal(args)
+    sync_yba(args)
 
     wait_for_xcluster_safe_time_to_catchup()
     log(Color.GREEN+f"Successfully added {len(table_ids)} table(s) to replication")
@@ -960,7 +969,7 @@ def remove_tables(args):
         table_ids += [table_map[db_table]]
 
     log(run_yb_admin(standby_config, f"alter_universe_replication {primary_config.universe_uuid}_{replication_info.name} remove_table {','.join(table_ids)}"))
-    sync_portal(args)
+    sync_yba(args)
 
     wait_for_xcluster_safe_time_to_catchup()
     log(Color.GREEN+f"Successfully removed {len(table_ids)} table(s) from replication")
@@ -1060,10 +1069,11 @@ def create_snapshot_schedule_int(config: UniverseConfig, database_name):
     log(Color.GREEN+f"Successfully created PITR snapshot schedule for {database_name}")
 
 def create_snapshot_schedule_if_needed(config: UniverseConfig, databases):
-    # Non-YBA only
     database_schedules = get_snapshot_info(config)
     for database_name in databases:
         if  database_name not in database_schedules:
+            if yba_config.IsValid():
+                raise_exception(f"Database {database_name} does not have a snapshot schedule. Use YBA to create a snapshot schedule for all databases under replication.")
             create_snapshot_schedule_int(config, database_name)
 
 def list_snapshot_schedules_for_iniverse(config: UniverseConfig):
@@ -1160,14 +1170,14 @@ def main():
         "reload_roles" : reload_roles,
         "switch_universe_configs" : swap_universe_configs,
         "get_xcluster_estimated_data_loss" : get_xcluster_estimated_data_loss,
-        "sync_portal" : sync_portal,
+        "sync_yba" : sync_yba,
         "list_snapshot_schedules" : list_snapshot_schedules,
         "create_snapshot_schedules" : create_snapshot_schedules,
         "delete_snapshot_schedules" : delete_snapshot_schedules,
     }
 
     # command_list = '\n\t'.join(function_map)
-    command_list = '\n\t'.join({"configure","show_config","planned_failover","sync_portal"})
+    command_list = '\n\t'.join({"configure","show_config","planned_failover","sync_yba"})
 
     usage_str=f"Usage: python3 {sys.argv[0]} <command> [args]\n"\
                 f"commands: {command_list}\n\n" \

@@ -314,12 +314,12 @@ def show_config(args):
 required_common_flags = {
     "consensus_max_batch_size_bytes=1048576",
     "rpc_throttle_threshold_bytes=524288",
-    "ysql_num_shards_per_tserver=3",
     # Optional flags
     # "db_block_cache_size_percentage=20",
     # "yb_client_admin_operation_timeout_sec=600",
     # "log_min_seconds_to_retain=86400",
     # "cdc_consumer_handler_thread_pool_size=200",
+    # "ysql_num_shards_per_tserver=3",
 }
 
 non_yba_common_flags = {"certs_for_cdc_dir=/home/yugabyte/yugabyte-tls-producer"}

@@ -100,13 +100,13 @@ def grant_file_permissions(file_path : str):
     return run_subprocess(chmod_command_str.split())
 
 def copy_file_from_remote(hostname : str, ssh_port: int, key_file : str, from_path : str, to_path : str):
-    scp_command_str = f"sudo scp -P {ssh_port} -i {key_file} yugabyte@{hostname}:{from_path} {to_path}"
+    scp_command_str = f"sudo scp -P {ssh_port} -i {key_file} -ostricthostkeychecking=no yugabyte@{hostname}:{from_path} {to_path}"
     return run_subprocess(scp_command_str.split())
 
 def copy_file_to_remote(hostname : str, ssh_port: int, key_file : str, from_path : str, to_path : str):
     mk_dir_str = f"mkdir -p {os.path.dirname(to_path)}"
     run_remotely(hostname, ssh_port, key_file, mk_dir_str)
-    scp_command_str = f"sudo scp -P {ssh_port} -i {key_file} {from_path} yugabyte@{hostname}:{to_path}"
+    scp_command_str = f"sudo scp -P {ssh_port} -i {key_file} -ostricthostkeychecking=no {from_path} yugabyte@{hostname}:{to_path}"
     return run_subprocess(scp_command_str.split())
 
 def move_file(from_path : str, to_path : str):

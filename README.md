@@ -1,8 +1,10 @@
 # xcluster-ctl
 
-This tool allows you to easily manage YugabyteDB transactional xCluster deployments.
+This tool allows you to easily manage YugabyteDB transactional xCluster deployments and perform planned and unplanned failovers.
 This must be run from a node that has network access and ssh certificates to both universes. If you have YBA, then use the node hosting it.
 Node to node encryption must be turned on.
+
+Unplanned failover and setup of replication with data requires backup restore which you can follow manual instructions from [here](https://docs.yugabyte.com/preview/manage/backup-restore/snapshot-ysql) or use the YBA UI.
 
 Min supported YugabyteDB version: 2.18.0.1-b4
 

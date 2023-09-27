@@ -312,7 +312,7 @@ def show_config(args):
 
 
 required_common_flags = {
-    "consensus_max_batch_size_bytes=1048576",
+    # "consensus_max_batch_size_bytes=1048576",
     # "rpc_throttle_threshold_bytes=524288",
     # Optional flags
     # "db_block_cache_size_percentage=20",

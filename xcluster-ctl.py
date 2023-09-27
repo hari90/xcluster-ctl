@@ -311,7 +311,8 @@ def show_config(args):
         log(Color.YELLOW+str(bootstrap_info))
 
 
-required_common_flags = {
+required_common_flags = set()
+# {
     # "consensus_max_batch_size_bytes=1048576",
     # "rpc_throttle_threshold_bytes=524288",
     # Optional flags
@@ -320,7 +321,7 @@ required_common_flags = {
     # "log_min_seconds_to_retain=86400",
     # "cdc_consumer_handler_thread_pool_size=200",
     # "ysql_num_shards_per_tserver=3",
-}
+# }
 
 non_yba_common_flags = {"certs_for_cdc_dir=/home/yugabyte/yugabyte-tls-producer"}
 
@@ -339,11 +340,11 @@ required_tserver_flags = required_common_flags.union({
 def validate_flags(url : str, ca_cert_path : str, required_flags, universe_name : str):
     set_flags = get_flags(url, ca_cert_path)
 
-    reuired_flags_int = required_flags
+    required_flags_int = required_flags
     if not yba_config.IsValid():
-       reuired_flags_int = reuired_flags_int.union(non_yba_common_flags)
+       required_flags_int = required_flags_int.union(non_yba_common_flags)
 
-    for flag in reuired_flags_int:
+    for flag in required_flags_int:
         if flag not in set_flags:
             raise_exception(f"Required flag {wrap_color(Color.YELLOW, flag)} is not set on {wrap_color(Color.YELLOW, universe_name)} {wrap_color(Color.YELLOW, url)}")
 

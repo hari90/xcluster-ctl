@@ -1079,8 +1079,9 @@ def create_snapshot_schedule_if_needed(config: UniverseConfig, databases):
     for database_name in databases:
         if  database_name not in database_schedules:
             if yba_config.IsValid():
-                raise_exception(f"Database {database_name} does not have a snapshot schedule. Use YBA to create a snapshot schedule for all databases under replication.")
-            create_snapshot_schedule_int(config, database_name)
+                log(f"{Color.RED} Database {database_name} does not have a snapshot schedule. Use YBA to create a snapshot schedule for all databases under replication.")
+            else:
+                create_snapshot_schedule_int(config, database_name)
 
 def list_snapshot_schedules_for_iniverse(config: UniverseConfig):
     log(f"Listing snapshot schedules for {Color.YELLOW}{config.universe_name}")
@@ -1186,7 +1187,7 @@ def main():
     command_list = '\n\t'.join({"configure","show_config","planned_failover","sync_yba"})
 
     usage_str=f"Usage: python3 {sys.argv[0]} <command> [args]\n"\
-                f"commands: {command_list}\n\n" \
+                f"commands:\n\t{command_list}\n\n" \
                 "'configure' must be run at least once\n"
 
     if len(sys.argv) < 2:

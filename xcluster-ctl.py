@@ -365,7 +365,7 @@ def sync_yba(args):
         return
 
     log(f"Synching YBA @{yba_config.url}")
-    # curl -k --location --request POST 'https://portal.dev.yugabyte.com/api/v1/customers/11d78d93-1381-4d1d-8393-ba76f47ba7a6/xcluster_configs/sync?targetUniverseUUID=76b9e2c2-8e29-45cf-a6fd-daa7dfe1b993' --header 'X-AUTH-YW-API-TOKEN: 244b3ac7-63bc-47c3-0' --data ''
+    # curl -k --location --request POST 'https://forevr.yugabyte.com/api/v1/customers/1sd78asd3-1381-4d1d-8d93-bae6fs7ba7a6/xcluster_configs/sync?targetUniverseUUID=76bdf2c2-8e29-45cf-a6fd-cba7dfe1b993' --header 'X-AUTH-YW-API-TOKEN: 244b3aa7-63bc-47d3-1' --data ''
 
     request_url = f"{yba_config.url}/api/v1/customers/{yba_config.customer_id}/xcluster_configs/sync?targetUniverseUUID={target_config.universe_uuid}"
     headers = {

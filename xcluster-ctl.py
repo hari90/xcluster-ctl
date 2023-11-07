@@ -1019,7 +1019,7 @@ def extract_consumer_registry(data: str):
                 raise_exception(f"Expected replication from {source_config.universe_name} {source_config.universe_uuid}, but found {universe_uuid}. Rerun 'configure' with the correct Source and Target universes")
 
         if previous_line_is_stream_map:
-            stream_id_pattern = r'key: "(.*)"'
+            stream_id_pattern = r'key: (?:"|&quot;)(.*)(?:"|&quot;)'
             match = re.search(stream_id_pattern, line)
             if match:
                 replication_info.stream_ids.append(match.group(1))

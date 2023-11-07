@@ -1008,7 +1008,7 @@ def extract_consumer_registry(data: str):
                 raise_exception("Multiple replication groups found. Only one replication group is supported")
             line = lines[i]
             i = i + 1
-            replication_key_pattern = r'key: "(.*)_(.*)"'
+            replication_key_pattern = r'key: (?:"|&quot;)(.*)_(.*)(?:"|&quot;)'
             match = re.search(replication_key_pattern, line)
             if match:
                 universe_uuid = match.group(1)

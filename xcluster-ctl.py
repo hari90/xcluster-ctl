@@ -384,7 +384,7 @@ def sync_yba(args):
         log_to_file(response.text)
     else:
         log_to_file(response.status_code, request_url, headers)
-        log(Color.RED+f"Failed to sync YBA. Status code:{response.status_code}. The API token may have expired. Please update the token in config.json and re-run sync_yba command.")
+        log(Color.RED+f"Failed to sync YBA. Status code:{response.status_code}. The API token may have expired. Please wait for the entire process to complete, update the token in config.json and run sync_yba command.")
         return
 
     log(Color.GREEN + "Successfully synced YBA")

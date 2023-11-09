@@ -509,17 +509,21 @@ def set_active_role(args):
 
     log(Color.GREEN+"Successfully set role to ACTIVE")
 
-# def get_cdc_streams():
-#     log("Getting replication streams")
-#     data = run_yb_admin(source_config, "list_cdc_streams")
-#     stream_ids = []
-#     for line in data:
-#         if 'stream_id:' in line:
-#             stream_id = line.split(':')[-1].strip().strip('"')
-#             stream_ids.append(stream_id)
-#     log(f"Found {len(stream_ids)} replication streams")
-#     log_to_file(stream_ids)
-#     return stream_ids
+def get_cdc_streams():
+    log("Getting replication streams")
+    data = run_yb_admin(source_config, "list_cdc_streams")
+    stream_ids = []
+    for line in data:
+        if 'stream_id:' in line:
+            stream_id = line.split(':')[-1].strip().strip('"')
+            stream_ids.append(stream_id)
+    log(f"Found {len(stream_ids)} replication streams")
+    log_to_file(stream_ids)
+    return stream_ids
+
+def cleanup_all_cdc_streams(args):
+    stream_ids = get_cdc_streams()
+    delete_cdc_stream_list(stream_ids)
 
 def is_replication_drain_done(stream_ids):
     result = ''.join(run_yb_admin(source_config, "wait_for_replication_drain "+','.join(stream_ids)))
@@ -670,19 +674,22 @@ def clear_bootstrap_from_config():
 
     write_config_file()
 
+def delete_cdc_stream_list(stream_ids):
+    log(f"Deleting {len(stream_ids)} streams")
+    i=1
+    for stream_id in stream_ids:
+        if i >1 :
+            print(LINE_UP, end=LINE_CLEAR)
+        print(f"{i}/{len(stream_ids)}")
+        delete_cdc_streams(stream_id)
+        i=i+1
+
 def clear_bootstrap(args):
     if not bootstrap_info.initialized:
         log(Color.GREEN+"No pending bootstraps to clear")
         return
 
-    log(f"Deleting {len(bootstrap_info.bootstrap_ids)} streams")
-    i=1
-    for bootstrap in bootstrap_info.bootstrap_ids:
-        if i >1 :
-            print(LINE_UP, end=LINE_CLEAR)
-        print(f"{i}/{len(bootstrap_info.bootstrap_ids)}")
-        delete_cdc_streams(bootstrap)
-        i=i+1
+    delete_cdc_stream_list(bootstrap_info.bootstrap_ids)
 
     clear_bootstrap_from_config()
 
@@ -1182,6 +1189,7 @@ def main():
         "list_snapshot_schedules" : list_snapshot_schedules,
         "create_snapshot_schedules" : create_snapshot_schedules,
         "delete_snapshot_schedules" : delete_snapshot_schedules,
+        "cleanup_all_cdc_streams" : cleanup_all_cdc_streams,
     }
 
     # command_list = '\n\t'.join(function_map)

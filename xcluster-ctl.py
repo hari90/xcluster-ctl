@@ -510,7 +510,7 @@ def set_active_role(args):
     log(Color.GREEN+"Successfully set role to ACTIVE")
 
 def get_cdc_streams():
-    log("Getting replication streams")
+    log(f"Getting replication streams from {wrap_color(Color.YELLOW, source_config.universe_name)}")
     data = run_yb_admin(source_config, "list_cdc_streams")
     stream_ids = []
     for line in data:

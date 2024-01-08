@@ -21,6 +21,29 @@ class Color:
 LINE_UP = '\033[1A'
 LINE_CLEAR = '\x1b[2K'
 
+root_user = "sudo"
+
+def init():
+    log_version()
+    get_root_user()
+
+def log_version():
+    # logs latest commit and time of commit
+    try:
+        commit_history = run_subprocess_no_log(["git" ,"log", "-1"])
+        log_to_file("Version:", commit_history[0], "\t", commit_history[2])
+    except Exception as e:
+        log_to_file(Color.YELLOW+f"Failed to get version information. {e}")
+
+def get_root_user():
+    global root_user
+    try:
+        run_subprocess(f"which sudo".split())
+        root_user = "sudo"
+    except Exception as e:
+        root_user = ""
+    log(f"has_sudo: {root_user}")
+
 def log(*values: object):
     log_to_file(*values)
     print(*values,  Color.RESET)
@@ -90,23 +113,23 @@ def run_subprocess(*command:object):
     return lines
 
 def run_remotely(hostname : str, ssh_port: int, key_file : str, command : str):
-    ssh_command_str = f"sudo ssh -i {key_file} -ostricthostkeychecking=no -p {ssh_port} yugabyte@{hostname}"
+    ssh_command_str = f"{root_user} ssh -i {key_file} -ostricthostkeychecking=no -p {ssh_port} yugabyte@{hostname}"
     ssh_command = ssh_command_str.split()
     ssh_command.append(f'{command}')
     return run_subprocess(ssh_command)
 
 def grant_file_permissions(file_path : str):
-    chmod_command_str = f"sudo chmod +rw {file_path}"
+    chmod_command_str = f"{root_user} chmod +rw {file_path}"
     return run_subprocess(chmod_command_str.split())
 
 def copy_file_from_remote(hostname : str, ssh_port: int, key_file : str, from_path : str, to_path : str):
-    scp_command_str = f"sudo scp -P {ssh_port} -i {key_file} -ostricthostkeychecking=no yugabyte@{hostname}:{from_path} {to_path}"
+    scp_command_str = f"{root_user} scp -P {ssh_port} -i {key_file} -ostricthostkeychecking=no yugabyte@{hostname}:{from_path} {to_path}"
     return run_subprocess(scp_command_str.split())
 
 def copy_file_to_remote(hostname : str, ssh_port: int, key_file : str, from_path : str, to_path : str):
     mk_dir_str = f"mkdir -p {os.path.dirname(to_path)}"
     run_remotely(hostname, ssh_port, key_file, mk_dir_str)
-    scp_command_str = f"sudo scp -P {ssh_port} -i {key_file} -ostricthostkeychecking=no {from_path} yugabyte@{hostname}:{to_path}"
+    scp_command_str = f"{root_user} scp -P {ssh_port} -i {key_file} -ostricthostkeychecking=no {from_path} yugabyte@{hostname}:{to_path}"
     return run_subprocess(scp_command_str.split())
 
 def move_file(from_path : str, to_path : str):

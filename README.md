@@ -15,6 +15,11 @@ Min supported YugabyteDB version: 2.18.0.1-b4
 - pip3
 - pip3 install urllib3
 - pip3 install requests
+To install the pip3 packages, you can run the following command:
+```
+cd pip-packages
+pip3 install -r requirements.txt
+```
 
 
 # Usage

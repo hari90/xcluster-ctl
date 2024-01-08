@@ -1156,8 +1156,11 @@ def restore_to_point_in_time(config: UniverseConfig, database: str, snapshot_id:
 
 def main():
     # logs latest commit and time of commit
-    commit_history = run_subprocess_no_log(["git" ,"log", "-1"])
-    log_to_file(commit_history[0], "\t", commit_history[2])
+    try:
+        commit_history = run_subprocess_no_log(["git" ,"log", "-1"])
+        log_to_file(commit_history[0], "\t", commit_history[2])
+    except Exception as e:
+        log_to_file(Color.YELLOW+f"Failed to get version information. {e}")
 
     # Define a dictionary to map user input to functions
     function_map = {

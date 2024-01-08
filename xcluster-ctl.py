@@ -404,7 +404,7 @@ def get_xcluster_safe_time_int():
                 raise_exception(f"Cannot find database {value} in {target_config.universe_name}")
             database_name=database_map[value]
         if 'safe_time"' in line:
-            if "2023-" not in value:
+            if "2024-" not in value:
                 uninitialized_safe_time=True
             # 2023-04-17 17:54:33.060186
             datetime_obj = datetime.datetime.strptime(value, '%Y-%m-%d %H:%M:%S.%f')

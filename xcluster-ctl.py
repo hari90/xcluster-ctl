@@ -556,7 +556,7 @@ def get_source_tables_map(databases):
     for table_info in result:
         match = False
         for database in databases:
-            pattern = f"^{database}.*(?<!catalog)$"
+            pattern = f"^{database}\..*(?<!catalog)$"
             re_match = re.match(pattern, table_info)
             if re_match:
                 match = True

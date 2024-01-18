@@ -714,14 +714,16 @@ def setup_replication_with_bootstrap(args):
     ensure_no_replication_in_progress()
     log(f"Setting up replication from {source_config.universe_name} to {target_config.universe_name} with bootstrap")
 
-    if len(args) != 2:
+    if len(args) < 1:
         replication_name = get_input("Please provide a replication name: ")
-        databases_str = get_input("Please provide a CSV list of database names: ")
     else:
         replication_name = args[0]
-        databases_str = args[1]
 
     if not bootstrap_info.initialized:
+        if len(args) == 2:
+            databases_str = args[1]
+        else:
+            databases_str = get_input("Please provide a CSV list of database names: ")
         bootstrap_databases([databases_str])
 
     copy_certs(source_config, target_config, replication_name)

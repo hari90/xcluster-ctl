@@ -2,5 +2,4 @@ certifi-2023.11.17-py3-none-any.whl
 charset_normalizer-3.3.2-cp311-cp311-macosx_11_0_arm64.whl
 idna-3.6-py3-none-any.whl
 requests-2.31.0-py3-none-any.whl
-requirements.txt
 urllib3-2.1.0-py3-none-any.whl
